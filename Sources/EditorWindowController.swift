@@ -5,17 +5,22 @@ import UniformTypeIdentifiers
 // MARK: - Preference keys
 
 private enum Prefs {
-    static let borderWeight  = "grabbit.borderWeight"
-    static let borderColor   = "grabbit.borderColor"
-    static let shadowX       = "grabbit.shadowX"
-    static let shadowY       = "grabbit.shadowY"
-    static let shadowBlur    = "grabbit.shadowBlur"
-    static let shadowColor   = "grabbit.shadowColor"
-    static let shadowOpacity = "grabbit.shadowOpacity"
-    static let arrowWeight   = "grabbit.arrowWeight"
-    static let arrowColor    = "grabbit.arrowColor"
-    static let borderEnabled = "grabbit.borderEnabled"
-    static let shadowEnabled = "grabbit.shadowEnabled"
+    static let borderWeight      = "grabbit.borderWeight"
+    static let borderColor       = "grabbit.borderColor"
+    static let shadowX           = "grabbit.shadowX"
+    static let shadowY           = "grabbit.shadowY"
+    static let shadowBlur        = "grabbit.shadowBlur"
+    static let shadowColor       = "grabbit.shadowColor"
+    static let shadowOpacity     = "grabbit.shadowOpacity"
+    static let arrowWeight       = "grabbit.arrowWeight"
+    static let arrowColor        = "grabbit.arrowColor"
+    static let borderEnabled     = "grabbit.borderEnabled"
+    static let shadowEnabled     = "grabbit.shadowEnabled"
+    static let textFontName      = "grabbit.textFontName"
+    static let textFontSize      = "grabbit.textFontSize"
+    static let textFontColor     = "grabbit.textFontColor"
+    static let textOutlineColor  = "grabbit.textOutlineColor"
+    static let textOutlineWeight = "grabbit.textOutlineWeight"
 }
 
 // MARK: - UserDefaults helpers
@@ -32,6 +37,10 @@ private func loadColor(_ key: String, default def: NSColor) -> NSColor {
     return c
 }
 
+private func loadString(_ key: String, default def: String) -> String {
+    UserDefaults.standard.string(forKey: key) ?? def
+}
+
 private func saveDouble(_ value: Double, key: String) {
     UserDefaults.standard.set(value, forKey: key)
 }
@@ -40,6 +49,10 @@ private func saveColor(_ color: NSColor, key: String) {
     if let data = try? NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: true) {
         UserDefaults.standard.set(data, forKey: key)
     }
+}
+
+private func saveString(_ value: String, key: String) {
+    UserDefaults.standard.set(value, forKey: key)
 }
 
 // MARK: - Tool mode
@@ -54,38 +67,51 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: State
 
     private let originalImage: NSImage
-    private var borderWeight:  CGFloat
-    private var borderColor:   NSColor
-    private var shadowOffsetX: CGFloat
-    private var shadowOffsetY: CGFloat
-    private var shadowBlur:    CGFloat
-    private var shadowColor:   NSColor
-    private var shadowOpacity: CGFloat
-    private var arrowWeight:   CGFloat
-    private var arrowColor:    NSColor
-    private var borderEnabled: Bool
-    private var shadowEnabled: Bool
+    private var borderWeight:      CGFloat
+    private var borderColor:       NSColor
+    private var shadowOffsetX:     CGFloat
+    private var shadowOffsetY:     CGFloat
+    private var shadowBlur:        CGFloat
+    private var shadowColor:       NSColor
+    private var shadowOpacity:     CGFloat
+    private var arrowWeight:       CGFloat
+    private var arrowColor:        NSColor
+    private var borderEnabled:     Bool
+    private var shadowEnabled:     Bool
+    private var textFontName:      String
+    private var textFontSize:      CGFloat
+    private var textFontColor:     NSColor
+    private var textOutlineColor:  NSColor
+    private var textOutlineWeight: CGFloat
     private var toolMode: ToolMode = .none
 
     // MARK: Views
 
-    private var captureView:        NSImageView!
-    private var annotationOverlay:  AnnotationOverlay!
-    private var canvas:             CanvasView!
-    private var sidebar:            TabbedEditorSidebar!
-    private var arrowToolButton:    NSButton!
+    private var captureView:             NSImageView!
+    private var annotationOverlay:       AnnotationOverlay!
+    private var canvas:                  CanvasView!
+    private var sidebar:                 TabbedEditorSidebar!
+    private var arrowToolButton:         NSButton!
+    private var textToolButton:          NSButton!
+    private var zoomScroll:              NSScrollView!
+    private var zoomLabel:              NSTextField!
 
-    private var borderWeightSlider:  NSSlider!;   private var borderWeightLabel:  NSTextField!
-    private var borderColorWell:     NSColorWell!
-    private var shadowXSlider:       NSSlider!;   private var shadowXLabel:       NSTextField!
-    private var shadowYSlider:       NSSlider!;   private var shadowYLabel:       NSTextField!
-    private var shadowBlurSlider:    NSSlider!;   private var shadowBlurLabel:    NSTextField!
-    private var shadowColorWell:     NSColorWell!
-    private var shadowOpacitySlider: NSSlider!;   private var shadowOpacityLabel: NSTextField!
-    private var borderToggle:        NSButton!
-    private var shadowToggle:        NSButton!
-    private var arrowWeightSlider:   NSSlider!;   private var arrowWeightLabel:   NSTextField!
-    private var arrowColorWell:      NSColorWell!
+    private var borderWeightSlider:      NSSlider!;   private var borderWeightLabel:      NSTextField!
+    private var borderColorWell:         NSColorWell!
+    private var shadowXSlider:           NSSlider!;   private var shadowXLabel:           NSTextField!
+    private var shadowYSlider:           NSSlider!;   private var shadowYLabel:           NSTextField!
+    private var shadowBlurSlider:        NSSlider!;   private var shadowBlurLabel:        NSTextField!
+    private var shadowColorWell:         NSColorWell!
+    private var shadowOpacitySlider:     NSSlider!;   private var shadowOpacityLabel:     NSTextField!
+    private var borderToggle:            NSButton!
+    private var shadowToggle:            NSButton!
+    private var arrowWeightSlider:       NSSlider!;   private var arrowWeightLabel:       NSTextField!
+    private var arrowColorWell:          NSColorWell!
+    private var textFontPopup:           NSPopUpButton!
+    private var textFontSizeSlider:      NSSlider!;   private var textFontSizeLabel:      NSTextField!
+    private var textFontColorWell:       NSColorWell!
+    private var textOutlineColorWell:    NSColorWell!
+    private var textOutlineWeightSlider: NSSlider!;   private var textOutlineWeightLabel: NSTextField!
 
     // MARK: - Show
 
@@ -103,19 +129,24 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     init(image: NSImage) {
         self.originalImage = image
 
-        borderWeight  = CGFloat(loadDouble(Prefs.borderWeight,  default: 0))
-        borderColor   = loadColor(Prefs.borderColor,            default: .black)
-        shadowOffsetX = CGFloat(loadDouble(Prefs.shadowX,       default: 5))
-        shadowOffsetY = CGFloat(loadDouble(Prefs.shadowY,       default: -5))
-        shadowBlur    = CGFloat(loadDouble(Prefs.shadowBlur,    default: 10))
-        shadowColor   = loadColor(Prefs.shadowColor,            default: .black)
-        shadowOpacity = CGFloat(loadDouble(Prefs.shadowOpacity, default: 0))
-        arrowWeight   = CGFloat(loadDouble(Prefs.arrowWeight,   default: 2))
-        arrowColor    = loadColor(Prefs.arrowColor,             default: .systemRed)
-        borderEnabled = UserDefaults.standard.object(forKey: Prefs.borderEnabled) != nil
-                        ? UserDefaults.standard.bool(forKey: Prefs.borderEnabled) : false
-        shadowEnabled = UserDefaults.standard.object(forKey: Prefs.shadowEnabled) != nil
-                        ? UserDefaults.standard.bool(forKey: Prefs.shadowEnabled) : false
+        borderWeight       = CGFloat(loadDouble(Prefs.borderWeight,      default: 0))
+        borderColor        = loadColor(Prefs.borderColor,                 default: .black)
+        shadowOffsetX      = CGFloat(loadDouble(Prefs.shadowX,            default: 5))
+        shadowOffsetY      = CGFloat(loadDouble(Prefs.shadowY,            default: -5))
+        shadowBlur         = CGFloat(loadDouble(Prefs.shadowBlur,         default: 10))
+        shadowColor        = loadColor(Prefs.shadowColor,                 default: .black)
+        shadowOpacity      = CGFloat(loadDouble(Prefs.shadowOpacity,      default: 0))
+        arrowWeight        = CGFloat(loadDouble(Prefs.arrowWeight,        default: 2))
+        arrowColor         = loadColor(Prefs.arrowColor,                  default: .systemRed)
+        borderEnabled      = UserDefaults.standard.object(forKey: Prefs.borderEnabled) != nil
+                             ? UserDefaults.standard.bool(forKey: Prefs.borderEnabled) : false
+        shadowEnabled      = UserDefaults.standard.object(forKey: Prefs.shadowEnabled) != nil
+                             ? UserDefaults.standard.bool(forKey: Prefs.shadowEnabled) : false
+        textFontName       = loadString(Prefs.textFontName,               default: "Helvetica-Bold")
+        textFontSize       = CGFloat(loadDouble(Prefs.textFontSize,       default: 24))
+        textFontColor      = loadColor(Prefs.textFontColor,               default: .white)
+        textOutlineColor   = loadColor(Prefs.textOutlineColor,            default: .black)
+        textOutlineWeight  = CGFloat(loadDouble(Prefs.textOutlineWeight,  default: 2))
 
         // ── Window ──────────────────────────────────────────────────────────────
         let screen = NSScreen.main ?? NSScreen.screens[0]
@@ -128,57 +159,104 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         win.setFrame(screen.visibleFrame, display: false)
         win.minSize = NSSize(width: 600, height: 400)
 
-        // ── Image view ──────────────────────────────────────────────────────────
+        // ── Image view + overlay ─────────────────────────────────────────────────
         let iv = NSImageView()
         iv.image = image
-        iv.imageScaling = .scaleProportionallyDown  // never enlarge beyond natural size
+        iv.imageScaling = .scaleProportionallyDown
         iv.imageAlignment = .alignCenter
         iv.translatesAutoresizingMaskIntoConstraints = false
 
         let ol = AnnotationOverlay()
         ol.translatesAutoresizingMaskIntoConstraints = false
+        ol.wantsLayer = true
 
-        // ── Canvas ──────────────────────────────────────────────────────────────
-        let cv = CanvasView()
-        cv.translatesAutoresizingMaskIntoConstraints = false
+        // ── Zoom scroll view ─────────────────────────────────────────────────────
+        let zoomDoc = NSView()
+        zoomDoc.translatesAutoresizingMaskIntoConstraints = true
+        zoomDoc.autoresizingMask = [.width, .height]
 
-        // ── Canvas toolbar (top-center) ──────────────────────────────────────────
-        let arrowBtn = makeToolButton("Arrow")
-        let textBtn  = makeToolButton("Text")
-        let shapeBtn = makeToolButton("Shape")
-        textBtn.isEnabled  = false
-        shapeBtn.isEnabled = false
-
-        let toolbarStack = NSStackView(views: [arrowBtn, textBtn, shapeBtn])
-        toolbarStack.orientation = .horizontal
-        toolbarStack.spacing = 6
-        toolbarStack.translatesAutoresizingMaskIntoConstraints = false
-
-        cv.addSubview(iv)
-        cv.addSubview(ol)
-        cv.addSubview(toolbarStack)
+        zoomDoc.addSubview(iv)
+        zoomDoc.addSubview(ol)
 
         let pad: CGFloat = 32
-        let tbH: CGFloat = 44
-
         NSLayoutConstraint.activate([
-            // Toolbar centered at top of canvas
-            toolbarStack.topAnchor.constraint(equalTo: cv.topAnchor, constant: 10),
-            toolbarStack.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
-
-            // Image view fills canvas below toolbar with padding
-            iv.topAnchor.constraint(equalTo: cv.topAnchor, constant: tbH),
-            iv.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -pad),
-            iv.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: pad),
-            iv.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -pad),
-
+            iv.topAnchor.constraint(equalTo: zoomDoc.topAnchor, constant: pad),
+            iv.bottomAnchor.constraint(equalTo: zoomDoc.bottomAnchor, constant: -pad),
+            iv.leadingAnchor.constraint(equalTo: zoomDoc.leadingAnchor, constant: pad),
+            iv.trailingAnchor.constraint(equalTo: zoomDoc.trailingAnchor, constant: -pad),
             ol.topAnchor.constraint(equalTo: iv.topAnchor),
             ol.bottomAnchor.constraint(equalTo: iv.bottomAnchor),
             ol.leadingAnchor.constraint(equalTo: iv.leadingAnchor),
             ol.trailingAnchor.constraint(equalTo: iv.trailingAnchor),
         ])
 
-        // ── Sidebar controls ────────────────────────────────────────────────────
+        let zs = ZoomableScrollView()
+        zs.allowsMagnification    = true
+        zs.minMagnification       = 0.1
+        zs.maxMagnification       = 8.0
+        zs.hasVerticalScroller    = true
+        zs.hasHorizontalScroller  = true
+        zs.autohidesScrollers     = true
+        zs.scrollerStyle          = .overlay
+        zs.drawsBackground        = false
+        zs.documentView           = zoomDoc
+        zs.translatesAutoresizingMaskIntoConstraints = false
+
+        // ── Canvas ───────────────────────────────────────────────────────────────
+        let cv = CanvasView()
+        cv.translatesAutoresizingMaskIntoConstraints = false
+
+        // ── Canvas toolbar ───────────────────────────────────────────────────────
+        let arrowBtn = makeToolButton("Arrow")
+        let textBtn  = makeToolButton("Text")
+        let shapeBtn = makeToolButton("Shape")
+        shapeBtn.isEnabled = false
+
+        let toolsStack = NSStackView(views: [arrowBtn, textBtn, shapeBtn])
+        toolsStack.orientation = .horizontal
+        toolsStack.spacing = 6
+        toolsStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let zoomOutBtn = NSButton(title: "−", target: nil, action: nil)
+        zoomOutBtn.bezelStyle = .rounded
+        zoomOutBtn.controlSize = .small
+        zoomOutBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let zoomInBtn = NSButton(title: "+", target: nil, action: nil)
+        zoomInBtn.bezelStyle = .rounded
+        zoomInBtn.controlSize = .small
+        zoomInBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let zl = NSTextField(labelWithString: "100%")
+        zl.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        zl.alignment = .center
+        zl.translatesAutoresizingMaskIntoConstraints = false
+        zl.widthAnchor.constraint(equalToConstant: 44).isActive = true
+
+        let zoomStack = NSStackView(views: [zoomOutBtn, zl, zoomInBtn])
+        zoomStack.orientation = .horizontal
+        zoomStack.spacing = 4
+        zoomStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let tbH: CGFloat = 44
+        cv.addSubview(zs)
+        cv.addSubview(toolsStack)
+        cv.addSubview(zoomStack)
+
+        NSLayoutConstraint.activate([
+            zs.topAnchor.constraint(equalTo: cv.topAnchor, constant: tbH),
+            zs.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+            zs.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            zs.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+
+            toolsStack.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
+            toolsStack.centerYAnchor.constraint(equalTo: cv.topAnchor, constant: tbH / 2),
+
+            zoomStack.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -12),
+            zoomStack.centerYAnchor.constraint(equalTo: cv.topAnchor, constant: tbH / 2),
+        ])
+
+        // ── Sidebar controls ─────────────────────────────────────────────────────
         let bwSlider = sld(0, 50,  Double(borderWeight));    let bwLabel = vlbl(fmt(borderWeight))
         let bcWell   = well(borderColor)
         let bToggle  = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -195,8 +273,29 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let awSlider = sld(1, 20, Double(arrowWeight));      let awLabel = vlbl(fmt(arrowWeight))
         let acWell   = well(arrowColor)
 
+        // Text property controls
+        let tfPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        tfPopup.controlSize = .small
+        tfPopup.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let fonts = ["Helvetica-Bold", "Helvetica", "Arial-BoldMT", "ArialMT", "Courier-Bold", "Courier",
+                     "TimesNewRomanPS-BoldMT", "TimesNewRomanPSMT", "Georgia-Bold", "Georgia",
+                     "Menlo-Bold", "Menlo-Regular", "Monaco"]
+        fonts.forEach { tfPopup.addItem(withTitle: $0.replacingOccurrences(of: "-", with: " ")) }
+        if let idx = fonts.firstIndex(of: textFontName) {
+            tfPopup.selectItem(at: idx)
+        }
+        let tfSizeSlider  = sld(8, 72, Double(textFontSize));          let tfSizeLabel = vlbl(fmt(textFontSize))
+        let tfColorWell   = well(textFontColor)
+        let toColorWell   = well(textOutlineColor)
+        let toWtSlider    = sld(0, 20, Double(textOutlineWeight));     let toWtLabel = vlbl(fmt(textOutlineWeight))
+
         let sb = TabbedEditorSidebar(
-            arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell
+            arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell,
+            textFontPopup: tfPopup,
+            textFontSizeSlider: tfSizeSlider, textFontSizeLabel: tfSizeLabel,
+            textFontColorWell: tfColorWell,
+            textOutlineColorWell: toColorWell,
+            textOutlineWeightSlider: toWtSlider, textOutlineWeightLabel: toWtLabel
         )
         sb.translatesAutoresizingMaskIntoConstraints = false
         sb.addEffectSection("BORDER", toggle: bToggle)
@@ -209,7 +308,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         sb.addEffectRow("Color",    scWell)
         sb.addEffectRow("Opacity",  soSlider, soLabel)
 
-        // ── Root ────────────────────────────────────────────────────────────────
+        // ── Root ─────────────────────────────────────────────────────────────────
         let root = NSView()
         root.addSubview(cv); root.addSubview(sb)
         NSLayoutConstraint.activate([
@@ -224,45 +323,99 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         ])
         win.contentView = root
 
-        // ── IUO assignments ─────────────────────────────────────────────────────
+        // ── IUO assignments ──────────────────────────────────────────────────────
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
-        arrowToolButton = arrowBtn
-        borderToggle = bToggle;          shadowToggle = sToggle
-        borderWeightSlider = bwSlider;   borderWeightLabel = bwLabel;   borderColorWell = bcWell
-        shadowXSlider = sxSlider;        shadowXLabel = sxLabel
-        shadowYSlider = sySlider;        shadowYLabel = syLabel
-        shadowBlurSlider = sbSlider;     shadowBlurLabel = sbLabel
+        arrowToolButton = arrowBtn;  textToolButton = textBtn
+        zoomScroll = zs;  zoomLabel = zl
+        borderToggle = bToggle;              shadowToggle = sToggle
+        borderWeightSlider = bwSlider;       borderWeightLabel = bwLabel;       borderColorWell = bcWell
+        shadowXSlider = sxSlider;            shadowXLabel = sxLabel
+        shadowYSlider = sySlider;            shadowYLabel = syLabel
+        shadowBlurSlider = sbSlider;         shadowBlurLabel = sbLabel
         shadowColorWell = scWell
-        shadowOpacitySlider = soSlider;  shadowOpacityLabel = soLabel
-        arrowWeightSlider = awSlider;    arrowWeightLabel = awLabel;    arrowColorWell = acWell
+        shadowOpacitySlider = soSlider;      shadowOpacityLabel = soLabel
+        arrowWeightSlider = awSlider;        arrowWeightLabel = awLabel;        arrowColorWell = acWell
+        textFontPopup = tfPopup
+        textFontSizeSlider = tfSizeSlider;   textFontSizeLabel = tfSizeLabel
+        textFontColorWell = tfColorWell;     textOutlineColorWell = toColorWell
+        textOutlineWeightSlider = toWtSlider; textOutlineWeightLabel = toWtLabel
 
         super.init(window: win)
         win.delegate = self
 
         // ── Wire targets ─────────────────────────────────────────────────────────
-        arrowBtn.target            = self; arrowBtn.action            = #selector(toggleArrowTool(_:))
-        borderToggle.target        = self; borderToggle.action        = #selector(borderToggleChanged(_:))
-        shadowToggle.target        = self; shadowToggle.action        = #selector(shadowToggleChanged(_:))
-        borderWeightSlider.target  = self; borderWeightSlider.action  = #selector(borderWeightChanged(_:))
-        shadowXSlider.target       = self; shadowXSlider.action       = #selector(shadowXChanged(_:))
-        shadowYSlider.target       = self; shadowYSlider.action       = #selector(shadowYChanged(_:))
-        shadowBlurSlider.target    = self; shadowBlurSlider.action    = #selector(shadowBlurChanged(_:))
-        shadowOpacitySlider.target = self; shadowOpacitySlider.action = #selector(shadowOpacityChanged(_:))
-        arrowWeightSlider.target   = self; arrowWeightSlider.action   = #selector(arrowWeightChanged(_:))
+        arrowBtn.target             = self; arrowBtn.action             = #selector(toggleArrowTool(_:))
+        textBtn.target              = self; textBtn.action              = #selector(toggleTextTool(_:))
+        zoomInBtn.target            = self; zoomInBtn.action            = #selector(zoomIn)
+        zoomOutBtn.target           = self; zoomOutBtn.action           = #selector(zoomOut)
+        borderToggle.target         = self; borderToggle.action         = #selector(borderToggleChanged(_:))
+        shadowToggle.target         = self; shadowToggle.action         = #selector(shadowToggleChanged(_:))
+        borderWeightSlider.target   = self; borderWeightSlider.action   = #selector(borderWeightChanged(_:))
+        shadowXSlider.target        = self; shadowXSlider.action        = #selector(shadowXChanged(_:))
+        shadowYSlider.target        = self; shadowYSlider.action        = #selector(shadowYChanged(_:))
+        shadowBlurSlider.target     = self; shadowBlurSlider.action     = #selector(shadowBlurChanged(_:))
+        shadowOpacitySlider.target  = self; shadowOpacitySlider.action  = #selector(shadowOpacityChanged(_:))
+        arrowWeightSlider.target    = self; arrowWeightSlider.action    = #selector(arrowWeightChanged(_:))
+        textFontPopup.target        = self; textFontPopup.action        = #selector(textFontChanged(_:))
+        textFontSizeSlider.target   = self; textFontSizeSlider.action   = #selector(textFontSizeChanged(_:))
+        textOutlineWeightSlider.target = self
+        textOutlineWeightSlider.action = #selector(textOutlineWeightChanged(_:))
+
+        (zoomScroll as? ZoomableScrollView)?.onMagnificationChanged = { [weak self] in
+            self?.updateZoomLabel()
+        }
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(colorPanelChanged),
             name: NSColorPanel.colorDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(zoomDidEnd),
+            name: NSScrollView.didEndLiveMagnifyNotification, object: zoomScroll)
 
         // ── Overlay wiring ───────────────────────────────────────────────────────
-        annotationOverlay.currentWeight = arrowWeight
-        annotationOverlay.currentColor  = arrowColor
+        annotationOverlay.currentWeight       = arrowWeight
+        annotationOverlay.currentColor        = arrowColor
+        annotationOverlay.currentFontName     = textFontName
+        annotationOverlay.currentFontSize     = textFontSize
+        annotationOverlay.currentFontColor    = textFontColor
+        annotationOverlay.currentOutlineColor = textOutlineColor
+        annotationOverlay.currentOutlineWeight = textOutlineWeight
+
         annotationOverlay.imageDisplayRectProvider = { [weak self] in
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
             return Self.imageDisplayRect(for: img, in: iv)
         }
         annotationOverlay.onCopy   = { [weak self] in self?.copyToClipboard() }
         annotationOverlay.onChange = { [weak self] in self?.refreshForExport() }
+
+        annotationOverlay.onTextSelectionChanged = { [weak self] ann in
+            guard let self else { return }
+            if let ann = ann {
+                self.textFontName      = ann.fontName
+                self.textFontSize      = ann.fontSize
+                self.textFontColor     = ann.fontColor
+                self.textOutlineColor  = ann.outlineColor
+                self.textOutlineWeight = ann.outlineWeight
+                // Propagate to current defaults so new annotations inherit.
+                self.annotationOverlay.currentFontName      = ann.fontName
+                self.annotationOverlay.currentFontSize      = ann.fontSize
+                self.annotationOverlay.currentFontColor     = ann.fontColor
+                self.annotationOverlay.currentOutlineColor  = ann.outlineColor
+                self.annotationOverlay.currentOutlineWeight = ann.outlineWeight
+            }
+            let fonts = ["Helvetica-Bold", "Helvetica", "Arial-BoldMT", "ArialMT", "Courier-Bold", "Courier",
+                         "TimesNewRomanPS-BoldMT", "TimesNewRomanPSMT", "Georgia-Bold", "Georgia",
+                         "Menlo-Bold", "Menlo-Regular", "Monaco"]
+            if let idx = fonts.firstIndex(of: self.textFontName) {
+                self.textFontPopup.selectItem(at: idx)
+            }
+            self.textFontSizeSlider.doubleValue      = Double(self.textFontSize)
+            self.textFontSizeLabel.stringValue        = fmt(self.textFontSize)
+            self.textFontColorWell.color              = self.textFontColor
+            self.textOutlineColorWell.color           = self.textOutlineColor
+            self.textOutlineWeightSlider.doubleValue  = Double(self.textOutlineWeight)
+            self.textOutlineWeightLabel.stringValue   = fmt(self.textOutlineWeight)
+        }
 
         refreshBaseImage()
         refreshShadow()
@@ -282,13 +435,43 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleArrowTool(_ sender: NSButton) {
         if sender.state == .on {
             toolMode = .arrow
-            annotationOverlay.isToolActive = true
+            textToolButton.state = .off
+            annotationOverlay.activeTool = .arrow
             window?.makeFirstResponder(annotationOverlay)
         } else {
             toolMode = .none
-            annotationOverlay.isToolActive = false
+            annotationOverlay.activeTool = .none
         }
         sidebar.setToolMode(toolMode)
+    }
+
+    @objc private func toggleTextTool(_ sender: NSButton) {
+        if sender.state == .on {
+            toolMode = .text
+            arrowToolButton.state = .off
+            annotationOverlay.activeTool = .text
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            toolMode = .none
+            annotationOverlay.activeTool = .none
+        }
+        sidebar.setToolMode(toolMode)
+    }
+
+    @objc private func zoomIn() {
+        zoomScroll.magnification = min(8.0, zoomScroll.magnification * 1.25)
+        updateZoomLabel()
+    }
+
+    @objc private func zoomOut() {
+        zoomScroll.magnification = max(0.1, zoomScroll.magnification / 1.25)
+        updateZoomLabel()
+    }
+
+    @objc private func zoomDidEnd(_ note: Notification) { updateZoomLabel() }
+
+    private func updateZoomLabel() {
+        zoomLabel.stringValue = "\(Int(round(zoomScroll.magnification * 100)))%"
     }
 
     @objc private func borderToggleChanged(_ btn: NSButton) {
@@ -339,6 +522,33 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         savePrefs()
     }
 
+    @objc private func textFontChanged(_ popup: NSPopUpButton) {
+        let fonts = ["Helvetica-Bold", "Helvetica", "Arial-BoldMT", "ArialMT", "Courier-Bold", "Courier",
+                     "TimesNewRomanPS-BoldMT", "TimesNewRomanPSMT", "Georgia-Bold", "Georgia",
+                     "Menlo-Bold", "Menlo-Regular", "Monaco"]
+        guard popup.indexOfSelectedItem >= 0, popup.indexOfSelectedItem < fonts.count else { return }
+        textFontName = fonts[popup.indexOfSelectedItem]
+        annotationOverlay.currentFontName = textFontName
+        annotationOverlay.updateSelectedText(fontName: textFontName)
+        savePrefs()
+    }
+
+    @objc private func textFontSizeChanged(_ s: NSSlider) {
+        textFontSize = CGFloat(s.doubleValue)
+        textFontSizeLabel.stringValue = fmt(textFontSize)
+        annotationOverlay.currentFontSize = textFontSize
+        annotationOverlay.updateSelectedText(fontSize: textFontSize)
+        savePrefs()
+    }
+
+    @objc private func textOutlineWeightChanged(_ s: NSSlider) {
+        textOutlineWeight = CGFloat(s.doubleValue)
+        textOutlineWeightLabel.stringValue = fmt(textOutlineWeight)
+        annotationOverlay.currentOutlineWeight = textOutlineWeight
+        annotationOverlay.updateSelectedText(outlineWeight: textOutlineWeight)
+        savePrefs()
+    }
+
     @objc private func colorPanelChanged() {
         if borderColorWell.isActive {
             borderColor = borderColorWell.color
@@ -350,6 +560,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             arrowColor = arrowColorWell.color
             annotationOverlay.currentColor = arrowColor
             annotationOverlay.updateSelected(color: arrowColor)
+        } else if textFontColorWell.isActive {
+            textFontColor = textFontColorWell.color
+            annotationOverlay.currentFontColor = textFontColor
+            annotationOverlay.updateSelectedText(fontColor: textFontColor)
+        } else if textOutlineColorWell.isActive {
+            textOutlineColor = textOutlineColorWell.color
+            annotationOverlay.currentOutlineColor = textOutlineColor
+            annotationOverlay.updateSelectedText(outlineColor: textOutlineColor)
         }
         savePrefs()
     }
@@ -364,6 +582,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         guard let win = window else { return }
         panel.beginSheetModal(for: win) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
+            self.annotationOverlay.finalizeEditing()
             self.writeImage(self.rendered(), to: url)
         }
     }
@@ -371,17 +590,22 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Prefs
 
     private func savePrefs() {
-        saveDouble(Double(borderWeight),  key: Prefs.borderWeight)
-        saveColor(borderColor,            key: Prefs.borderColor)
+        saveDouble(Double(borderWeight),      key: Prefs.borderWeight)
+        saveColor(borderColor,                key: Prefs.borderColor)
         UserDefaults.standard.set(borderEnabled, forKey: Prefs.borderEnabled)
-        saveDouble(Double(shadowOffsetX), key: Prefs.shadowX)
-        saveDouble(Double(shadowOffsetY), key: Prefs.shadowY)
-        saveDouble(Double(shadowBlur),    key: Prefs.shadowBlur)
-        saveColor(shadowColor,            key: Prefs.shadowColor)
-        saveDouble(Double(shadowOpacity), key: Prefs.shadowOpacity)
+        saveDouble(Double(shadowOffsetX),     key: Prefs.shadowX)
+        saveDouble(Double(shadowOffsetY),     key: Prefs.shadowY)
+        saveDouble(Double(shadowBlur),        key: Prefs.shadowBlur)
+        saveColor(shadowColor,                key: Prefs.shadowColor)
+        saveDouble(Double(shadowOpacity),     key: Prefs.shadowOpacity)
         UserDefaults.standard.set(shadowEnabled, forKey: Prefs.shadowEnabled)
-        saveDouble(Double(arrowWeight),   key: Prefs.arrowWeight)
-        saveColor(arrowColor,             key: Prefs.arrowColor)
+        saveDouble(Double(arrowWeight),       key: Prefs.arrowWeight)
+        saveColor(arrowColor,                 key: Prefs.arrowColor)
+        saveString(textFontName,              key: Prefs.textFontName)
+        saveDouble(Double(textFontSize),      key: Prefs.textFontSize)
+        saveColor(textFontColor,              key: Prefs.textFontColor)
+        saveColor(textOutlineColor,           key: Prefs.textOutlineColor)
+        saveDouble(Double(textOutlineWeight), key: Prefs.textOutlineWeight)
     }
 
     // MARK: - Refresh
@@ -410,6 +634,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private func rendered() -> NSImage {
         var img = (borderEnabled && borderWeight > 0) ? withBorder(originalImage) : originalImage
         img = withArrows(img)
+        img = withTexts(img)
         if shadowEnabled && shadowOpacity > 0 { img = withShadow(img) }
         return img
     }
@@ -442,6 +667,33 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         return out
     }
 
+    private func withTexts(_ base: NSImage) -> NSImage {
+        let texts = annotationOverlay.textAnnotations.filter { !$0.content.isEmpty }
+        guard !texts.isEmpty else { return base }
+        let out = NSImage(size: base.size)
+        out.lockFocus()
+        base.draw(in: NSRect(origin: .zero, size: base.size))
+        let displayW = annotationOverlay.imageDisplayRect.width
+        let scale = displayW > 0 ? base.size.width / displayW : 1
+        for ann in texts {
+            let pt   = CGPoint(x: ann.position.x * base.size.width,
+                               y: ann.position.y * base.size.height)
+            let font = NSFont.boldSystemFont(ofSize: ann.fontSize * scale)
+            if ann.outlineWeight > 0 {
+                makeTextAttrStr(ann.content, font: font,
+                                fontColor: .clear, outlineColor: ann.outlineColor,
+                                outlineWeight: ann.outlineWeight * scale, strokeOnly: true)
+                    .draw(at: pt)
+            }
+            makeTextAttrStr(ann.content, font: font,
+                            fontColor: ann.fontColor, outlineColor: ann.outlineColor,
+                            outlineWeight: ann.outlineWeight * scale, strokeOnly: false)
+                .draw(at: pt)
+        }
+        out.unlockFocus()
+        return out
+    }
+
     private func withShadow(_ base: NSImage) -> NSImage {
         let blur = shadowBlur
         let pad  = blur * 2 + max(abs(shadowOffsetX), abs(shadowOffsetY)) + 8
@@ -460,6 +712,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Clipboard / write
 
     private func copyToClipboard() {
+        annotationOverlay.finalizeEditing()
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([rendered()])
@@ -483,6 +736,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self,
             name: NSColorPanel.colorDidChangeNotification, object: nil)
+        NotificationCenter.default.removeObserver(self,
+            name: NSScrollView.didEndLiveMagnifyNotification, object: zoomScroll)
         Self.openEditors.removeAll { $0 === self }
         if Self.openEditors.isEmpty { NSApp.setActivationPolicy(.accessory) }
     }
@@ -509,8 +764,16 @@ private class TabbedEditorSidebar: NSView {
     private let propertiesStack:  NSStackView
     private var noToolView:       NSView!
     private var arrowPropViews:   [NSView] = []
+    private var textPropViews:    [NSView] = []
 
-    init(arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell) {
+    init(
+        arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
+        textFontPopup: NSPopUpButton,
+        textFontSizeSlider: NSSlider, textFontSizeLabel: NSTextField,
+        textFontColorWell: NSColorWell,
+        textOutlineColorWell: NSColorWell,
+        textOutlineWeightSlider: NSSlider, textOutlineWeightLabel: NSTextField
+    ) {
         tabControl = NSSegmentedControl(
             labels: ["Properties", "Effects"],
             trackingMode: .selectOne, target: nil, action: nil
@@ -534,15 +797,21 @@ private class TabbedEditorSidebar: NSView {
         let ps = NSScrollView()
         ps.hasVerticalScroller = true; ps.autohidesScrollers = true
         ps.drawsBackground = false
-        ps.documentView = propertiesStack
         ps.translatesAutoresizingMaskIntoConstraints = false
+        let pClip = FlippedClipView()
+        pClip.drawsBackground = false
+        ps.contentView = pClip
+        ps.documentView = propertiesStack
         propertiesScroll = ps
 
         let es = NSScrollView()
         es.hasVerticalScroller = true; es.autohidesScrollers = true
         es.drawsBackground = false
-        es.documentView = effectsStack
         es.translatesAutoresizingMaskIntoConstraints = false
+        let eClip = FlippedClipView()
+        eClip.drawsBackground = false
+        es.contentView = eClip
+        es.documentView = effectsStack
         effectsScroll = es
 
         super.init(frame: .zero)
@@ -550,9 +819,11 @@ private class TabbedEditorSidebar: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor(calibratedWhite: 0.97, alpha: 1).cgColor
 
-        let sep = NSView()
-        sep.wantsLayer = true
-        sep.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        let sep = NSBox()
+        sep.boxType = .custom
+        sep.borderWidth = 0
+        sep.fillColor = NSColor.separatorColor
+        sep.cornerRadius = 0
         sep.translatesAutoresizingMaskIntoConstraints = false
 
         let tabDivider = NSBox()
@@ -576,6 +847,7 @@ private class TabbedEditorSidebar: NSView {
             tabControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
 
             tabDivider.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 8),
+            tabDivider.heightAnchor.constraint(equalToConstant: 1),
             tabDivider.leadingAnchor.constraint(equalTo: sep.trailingAnchor),
             tabDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
 
@@ -589,10 +861,12 @@ private class TabbedEditorSidebar: NSView {
             effectsScroll.leadingAnchor.constraint(equalTo: sep.trailingAnchor),
             effectsScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            propertiesStack.topAnchor.constraint(equalTo: ps.contentView.topAnchor),
-            propertiesStack.widthAnchor.constraint(equalTo: ps.contentView.widthAnchor),
-            effectsStack.topAnchor.constraint(equalTo: es.contentView.topAnchor),
-            effectsStack.widthAnchor.constraint(equalTo: es.contentView.widthAnchor),
+            propertiesStack.topAnchor.constraint(equalTo: pClip.topAnchor),
+            propertiesStack.leadingAnchor.constraint(equalTo: pClip.leadingAnchor),
+            propertiesStack.widthAnchor.constraint(equalTo: pClip.widthAnchor),
+            effectsStack.topAnchor.constraint(equalTo: eClip.topAnchor),
+            effectsStack.leadingAnchor.constraint(equalTo: eClip.leadingAnchor),
+            effectsStack.widthAnchor.constraint(equalTo: eClip.widthAnchor),
         ])
 
         // ── Properties: "no tool" placeholder ───────────────────────────────────
@@ -616,7 +890,7 @@ private class TabbedEditorSidebar: NSView {
         propertiesStack.addArrangedSubview(ntBox)
         noToolView = ntBox
 
-        // ── Properties: arrow tool section (hidden until arrow tool active) ──────
+        // ── Properties: arrow tool section ──────────────────────────────────────
         let arrowHeader = makeSectionBox("ARROW")
         arrowHeader.isHidden = true
         propertiesStack.addArrangedSubview(arrowHeader)
@@ -631,6 +905,37 @@ private class TabbedEditorSidebar: NSView {
         acRow.isHidden = true
         propertiesStack.addArrangedSubview(acRow)
         arrowPropViews.append(acRow)
+
+        // ── Properties: text tool section ───────────────────────────────────────
+        let textHeader = makeSectionBox("TEXT")
+        textHeader.isHidden = true
+        propertiesStack.addArrangedSubview(textHeader)
+        textPropViews.append(textHeader)
+
+        let tfFontRow = makeSidebarRow("Font", textFontPopup)
+        tfFontRow.isHidden = true
+        propertiesStack.addArrangedSubview(tfFontRow)
+        textPropViews.append(tfFontRow)
+
+        let tfSizeRow = makeSidebarRow("Size", textFontSizeSlider, textFontSizeLabel)
+        tfSizeRow.isHidden = true
+        propertiesStack.addArrangedSubview(tfSizeRow)
+        textPropViews.append(tfSizeRow)
+
+        let tfColorRow = makeSidebarRow("Color", textFontColorWell)
+        tfColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(tfColorRow)
+        textPropViews.append(tfColorRow)
+
+        let toColorRow = makeSidebarRow("Outline", textOutlineColorWell)
+        toColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(toColorRow)
+        textPropViews.append(toColorRow)
+
+        let toWtRow = makeSidebarRow("Thickness", textOutlineWeightSlider, textOutlineWeightLabel)
+        toWtRow.isHidden = true
+        propertiesStack.addArrangedSubview(toWtRow)
+        textPropViews.append(toWtRow)
 
         // Start showing Properties tab
         effectsScroll.isHidden = true
@@ -651,8 +956,9 @@ private class TabbedEditorSidebar: NSView {
     func setToolMode(_ mode: ToolMode) {
         noToolView.isHidden = mode != .none
         let isArrow = mode == .arrow
+        let isText  = mode == .text
         arrowPropViews.forEach { $0.isHidden = !isArrow }
-        // Auto-switch to Properties tab when a tool activates
+        textPropViews.forEach  { $0.isHidden = !isText }
         if mode != .none && tabControl.selectedSegment != 0 {
             tabControl.selectedSegment = 0
             propertiesScroll.isHidden = false
@@ -660,7 +966,7 @@ private class TabbedEditorSidebar: NSView {
         }
     }
 
-    // MARK: Effects panel builders (called from EditorWindowController)
+    // MARK: Effects panel builders
 
     func addEffectSection(_ title: String, toggle: NSButton? = nil) {
         if !effectsStack.arrangedSubviews.isEmpty {
@@ -674,7 +980,7 @@ private class TabbedEditorSidebar: NSView {
         effectsStack.addArrangedSubview(makeSidebarRow(labelText, control, valLabel))
     }
 
-    // MARK: Private row/section builders
+    // MARK: Private builders
 
     private func makeSectionBox(_ title: String, toggle: NSButton? = nil) -> NSView {
         let lbl = NSTextField(labelWithString: title)
@@ -727,6 +1033,37 @@ private class TabbedEditorSidebar: NSView {
         row.heightAnchor.constraint(equalToConstant: 30).isActive = true
         return row
     }
+}
+
+// MARK: - ZoomableScrollView
+
+private class ZoomableScrollView: NSScrollView {
+    var onMagnificationChanged: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        guard event.modifierFlags.contains(.command) else {
+            super.scrollWheel(with: event); return
+        }
+        let delta = event.scrollingDeltaY
+        guard delta != 0 else { return }
+        let factor: CGFloat = delta > 0 ? 1.08 : 1 / 1.08
+        let newMag = (magnification * factor).clamped(to: minMagnification...maxMagnification)
+        let center = convert(event.locationInWindow, from: nil)
+        setMagnification(newMag, centeredAt: center)
+        onMagnificationChanged?()
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        max(range.lowerBound, min(range.upperBound, self))
+    }
+}
+
+// MARK: - FlippedClipView
+
+private class FlippedClipView: NSClipView {
+    override var isFlipped: Bool { true }
 }
 
 // MARK: - Canvas
