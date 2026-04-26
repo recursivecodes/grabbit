@@ -21,6 +21,9 @@ private enum Prefs {
     static let textFontColor     = "grabbit.textFontColor"
     static let textOutlineColor  = "grabbit.textOutlineColor"
     static let textOutlineWeight = "grabbit.textOutlineWeight"
+    static let shapeBorderWeight = "grabbit.shapeBorderWeight"
+    static let shapeBorderColor  = "grabbit.shapeBorderColor"
+    static let shapeFillColor    = "grabbit.shapeFillColor"
 }
 
 // MARK: - UserDefaults helpers
@@ -85,6 +88,12 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var textOutlineWeight: CGFloat
     private var toolMode: ToolMode = .none
 
+    // Shape state
+    private var shapeType:        ShapeType = .rectangle
+    private var shapeBorderWeight: CGFloat = 2
+    private var shapeBorderColor: NSColor = .black
+    private var shapeFillColor:   NSColor = .clear
+
     // MARK: Views
 
     private var captureView:             NSImageView!
@@ -112,6 +121,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var textFontColorWell:       NSColorWell!
     private var textOutlineColorWell:    NSColorWell!
     private var textOutlineWeightSlider: NSSlider!;   private var textOutlineWeightLabel: NSTextField!
+    private var shapeTypePopup:          NSPopUpButton!
+    private var shapeBorderWeightSlider: NSSlider!;   private var shapeBorderWeightLabel: NSTextField!
+    private var shapeBorderColorWell:    NSColorWell!
+    private var shapeFillColorWell:      NSColorWell!
 
     // MARK: - Show
 
@@ -147,6 +160,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         textFontColor      = loadColor(Prefs.textFontColor,               default: .white)
         textOutlineColor   = loadColor(Prefs.textOutlineColor,            default: .black)
         textOutlineWeight  = CGFloat(loadDouble(Prefs.textOutlineWeight,  default: 2))
+
+        shapeBorderWeight  = CGFloat(loadDouble(Prefs.shapeBorderWeight,  default: 2))
+        shapeBorderColor   = loadColor(Prefs.shapeBorderColor,            default: .black)
+        shapeFillColor     = loadColor(Prefs.shapeFillColor,              default: .clear)
 
         // ── Window ──────────────────────────────────────────────────────────────
         let screen = NSScreen.main ?? NSScreen.screens[0]
@@ -210,7 +227,6 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let arrowBtn = makeToolButton("Arrow")
         let textBtn  = makeToolButton("Text")
         let shapeBtn = makeToolButton("Shape")
-        shapeBtn.isEnabled = false
 
         let toolsStack = NSStackView(views: [arrowBtn, textBtn, shapeBtn])
         toolsStack.orientation = .horizontal
@@ -289,13 +305,29 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let toColorWell   = well(textOutlineColor)
         let toWtSlider    = sld(0, 20, Double(textOutlineWeight));     let toWtLabel = vlbl(fmt(textOutlineWeight))
 
+        // Shape property controls
+        let shapeTypePopupLocal = NSPopUpButton(frame: .zero, pullsDown: false)
+        shapeTypePopupLocal.controlSize = .small
+        shapeTypePopupLocal.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        shapeTypePopupLocal.addItem(withTitle: "Rectangle")
+        shapeTypePopupLocal.addItem(withTitle: "Circle")
+        shapeTypePopupLocal.addItem(withTitle: "Rounded Rectangle")
+        shapeTypePopupLocal.selectItem(at: 0)
+        let shapeBorderSlider = sld(0, 50, Double(shapeBorderWeight)); let shapeBorderLabel = vlbl(fmt(shapeBorderWeight))
+        let shapeBorderWell   = well(shapeBorderColor)
+        let shapeFillWell     = well(shapeFillColor)
+
         let sb = TabbedEditorSidebar(
             arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell,
             textFontPopup: tfPopup,
             textFontSizeSlider: tfSizeSlider, textFontSizeLabel: tfSizeLabel,
             textFontColorWell: tfColorWell,
             textOutlineColorWell: toColorWell,
-            textOutlineWeightSlider: toWtSlider, textOutlineWeightLabel: toWtLabel
+            textOutlineWeightSlider: toWtSlider, textOutlineWeightLabel: toWtLabel,
+            shapeTypePopup: shapeTypePopupLocal,
+            shapeBorderWeightSlider: shapeBorderSlider, shapeBorderWeightLabel: shapeBorderLabel,
+            shapeBorderColorWell: shapeBorderWell,
+            shapeFillColorWell: shapeFillWell
         )
         sb.translatesAutoresizingMaskIntoConstraints = false
         sb.addEffectSection("BORDER", toggle: bToggle)
@@ -339,6 +371,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         textFontSizeSlider = tfSizeSlider;   textFontSizeLabel = tfSizeLabel
         textFontColorWell = tfColorWell;     textOutlineColorWell = toColorWell
         textOutlineWeightSlider = toWtSlider; textOutlineWeightLabel = toWtLabel
+        shapeTypePopup = shapeTypePopupLocal; shapeBorderWeightSlider = shapeBorderSlider
+        shapeBorderWeightLabel = shapeBorderLabel; shapeBorderColorWell = shapeBorderWell
+        shapeFillColorWell = shapeFillWell
 
         super.init(window: win)
         win.delegate = self
@@ -346,6 +381,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         // ── Wire targets ─────────────────────────────────────────────────────────
         arrowBtn.target             = self; arrowBtn.action             = #selector(toggleArrowTool(_:))
         textBtn.target              = self; textBtn.action              = #selector(toggleTextTool(_:))
+        shapeBtn.target             = self; shapeBtn.action             = #selector(toggleShapeTool(_:))
         zoomInBtn.target            = self; zoomInBtn.action            = #selector(zoomIn)
         zoomOutBtn.target           = self; zoomOutBtn.action           = #selector(zoomOut)
         borderToggle.target         = self; borderToggle.action         = #selector(borderToggleChanged(_:))
@@ -360,6 +396,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         textFontSizeSlider.target   = self; textFontSizeSlider.action   = #selector(textFontSizeChanged(_:))
         textOutlineWeightSlider.target = self
         textOutlineWeightSlider.action = #selector(textOutlineWeightChanged(_:))
+        shapeTypePopup.target = self
+        shapeTypePopup.action = #selector(shapeTypeChanged(_:))
+        shapeBorderWeightSlider.target = self
+        shapeBorderWeightSlider.action = #selector(shapeBorderWeightChanged(_:))
+        shapeBorderColorWell.target = self
+        shapeBorderColorWell.action = #selector(colorPanelChanged)
+        shapeFillColorWell.target = self
+        shapeFillColorWell.action = #selector(colorPanelChanged)
 
         (zoomScroll as? ZoomableScrollView)?.onMagnificationChanged = { [weak self] in
             self?.updateZoomLabel()
@@ -380,6 +424,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         annotationOverlay.currentFontColor    = textFontColor
         annotationOverlay.currentOutlineColor = textOutlineColor
         annotationOverlay.currentOutlineWeight = textOutlineWeight
+        annotationOverlay.currentShapeType     = shapeType
+        annotationOverlay.currentBorderWeight  = shapeBorderWeight
+        annotationOverlay.currentBorderColor   = shapeBorderColor
+        annotationOverlay.currentFillColor     = shapeFillColor
 
         annotationOverlay.imageDisplayRectProvider = { [weak self] in
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
@@ -450,6 +498,20 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             toolMode = .text
             arrowToolButton.state = .off
             annotationOverlay.activeTool = .text
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            toolMode = .none
+            annotationOverlay.activeTool = .none
+        }
+        sidebar.setToolMode(toolMode)
+    }
+
+    @objc private func toggleShapeTool(_ sender: NSButton) {
+        if sender.state == .on {
+            toolMode = .shape
+            arrowToolButton.state = .off
+            textToolButton.state = .off
+            annotationOverlay.activeTool = .shape
             window?.makeFirstResponder(annotationOverlay)
         } else {
             toolMode = .none
@@ -549,6 +611,23 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         savePrefs()
     }
 
+    @objc private func shapeTypeChanged(_ popup: NSPopUpButton) {
+        let types: [ShapeType] = [.rectangle, .circle, .roundedRectangle]
+        guard popup.indexOfSelectedItem >= 0, popup.indexOfSelectedItem < types.count else { return }
+        shapeType = types[popup.indexOfSelectedItem]
+        annotationOverlay.currentShapeType = shapeType
+        annotationOverlay.updateSelectedShape(shapeType: shapeType)
+        savePrefs()
+    }
+
+    @objc private func shapeBorderWeightChanged(_ s: NSSlider) {
+        shapeBorderWeight = CGFloat(s.doubleValue)
+        shapeBorderWeightLabel.stringValue = fmt(shapeBorderWeight)
+        annotationOverlay.currentBorderWeight = shapeBorderWeight
+        annotationOverlay.updateSelectedShape(borderWeight: shapeBorderWeight)
+        savePrefs()
+    }
+
     @objc private func colorPanelChanged() {
         if borderColorWell.isActive {
             borderColor = borderColorWell.color
@@ -568,6 +647,16 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             textOutlineColor = textOutlineColorWell.color
             annotationOverlay.currentOutlineColor = textOutlineColor
             annotationOverlay.updateSelectedText(outlineColor: textOutlineColor)
+        } else if shapeBorderColorWell.isActive {
+            shapeBorderColor = shapeBorderColorWell.color
+            annotationOverlay.currentBorderColor = shapeBorderColor
+            annotationOverlay.updateSelectedShape(borderColor: shapeBorderColor)
+            savePrefs()
+        } else if shapeFillColorWell.isActive {
+            shapeFillColor = shapeFillColorWell.color
+            annotationOverlay.currentFillColor = shapeFillColor
+            annotationOverlay.updateSelectedShape(fillColor: shapeFillColor)
+            savePrefs()
         }
         savePrefs()
     }
@@ -606,6 +695,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         saveColor(textFontColor,              key: Prefs.textFontColor)
         saveColor(textOutlineColor,           key: Prefs.textOutlineColor)
         saveDouble(Double(textOutlineWeight), key: Prefs.textOutlineWeight)
+        saveDouble(Double(shapeBorderWeight), key: Prefs.shapeBorderWeight)
+        saveColor(shapeBorderColor,           key: Prefs.shapeBorderColor)
+        saveColor(shapeFillColor,             key: Prefs.shapeFillColor)
     }
 
     // MARK: - Refresh
@@ -635,6 +727,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         var img = (borderEnabled && borderWeight > 0) ? withBorder(originalImage) : originalImage
         img = withArrows(img)
         img = withTexts(img)
+        img = withShapes(img)
         if shadowEnabled && shadowOpacity > 0 { img = withShadow(img) }
         return img
     }
@@ -689,6 +782,44 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
                             fontColor: ann.fontColor, outlineColor: ann.outlineColor,
                             outlineWeight: ann.outlineWeight * scale, strokeOnly: false)
                 .draw(at: pt)
+        }
+        out.unlockFocus()
+        return out
+    }
+
+    private func withShapes(_ base: NSImage) -> NSImage {
+        let shapes = annotationOverlay.shapes
+        guard !shapes.isEmpty else { return base }
+        let out = NSImage(size: base.size)
+        out.lockFocus()
+        base.draw(in: NSRect(origin: .zero, size: base.size))
+        let displayW = annotationOverlay.imageDisplayRect.width
+        let scale = displayW > 0 ? base.size.width / displayW : 1
+        for shape in shapes {
+            let origin = CGPoint(x: shape.rect.origin.x * base.size.width,
+                                y: shape.rect.origin.y * base.size.height)
+            let size = CGSize(width: shape.rect.size.width * base.size.width,
+                             height: shape.rect.size.height * base.size.height)
+            var rect = CGRect(origin: origin, size: size)
+            rect = rect.standardized
+            let path = NSBezierPath()
+            switch shape.shapeType {
+            case .circle:
+                path.appendOval(in: rect)
+            case .rectangle:
+                path.appendRect(rect)
+            case .roundedRectangle:
+                path.appendRoundedRect(rect, xRadius: 10 * scale, yRadius: 10 * scale)
+            }
+            // Fill
+            if shape.fillColor.alphaComponent > 0 {
+                shape.fillColor.setFill()
+                path.fill()
+            }
+            // Stroke
+            shape.borderColor.setStroke()
+            path.lineWidth = shape.borderWeight * scale
+            path.stroke()
         }
         out.unlockFocus()
         return out
@@ -765,6 +896,7 @@ private class TabbedEditorSidebar: NSView {
     private var noToolView:       NSView!
     private var arrowPropViews:   [NSView] = []
     private var textPropViews:    [NSView] = []
+    private var shapePropViews:   [NSView] = []
 
     init(
         arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
@@ -772,7 +904,11 @@ private class TabbedEditorSidebar: NSView {
         textFontSizeSlider: NSSlider, textFontSizeLabel: NSTextField,
         textFontColorWell: NSColorWell,
         textOutlineColorWell: NSColorWell,
-        textOutlineWeightSlider: NSSlider, textOutlineWeightLabel: NSTextField
+        textOutlineWeightSlider: NSSlider, textOutlineWeightLabel: NSTextField,
+        shapeTypePopup: NSPopUpButton,
+        shapeBorderWeightSlider: NSSlider, shapeBorderWeightLabel: NSTextField,
+        shapeBorderColorWell: NSColorWell,
+        shapeFillColorWell: NSColorWell
     ) {
         tabControl = NSSegmentedControl(
             labels: ["Properties", "Effects"],
@@ -937,6 +1073,32 @@ private class TabbedEditorSidebar: NSView {
         propertiesStack.addArrangedSubview(toWtRow)
         textPropViews.append(toWtRow)
 
+        // ── Properties: shape tool section ──────────────────────────────────────
+        let shapeHeader = makeSectionBox("SHAPE")
+        shapeHeader.isHidden = true
+        propertiesStack.addArrangedSubview(shapeHeader)
+        shapePropViews.append(shapeHeader)
+
+        let shapeTypeRow = makeSidebarRow("Type", shapeTypePopup)
+        shapeTypeRow.isHidden = true
+        propertiesStack.addArrangedSubview(shapeTypeRow)
+        shapePropViews.append(shapeTypeRow)
+
+        let shapeBorderRow = makeSidebarRow("Border", shapeBorderWeightSlider, shapeBorderWeightLabel)
+        shapeBorderRow.isHidden = true
+        propertiesStack.addArrangedSubview(shapeBorderRow)
+        shapePropViews.append(shapeBorderRow)
+
+        let shapeBorderColorRow = makeSidebarRow("Color", shapeBorderColorWell)
+        shapeBorderColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(shapeBorderColorRow)
+        shapePropViews.append(shapeBorderColorRow)
+
+        let shapeFillColorRow = makeSidebarRow("Fill", shapeFillColorWell)
+        shapeFillColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(shapeFillColorRow)
+        shapePropViews.append(shapeFillColorRow)
+
         // Start showing Properties tab
         effectsScroll.isHidden = true
 
@@ -957,8 +1119,10 @@ private class TabbedEditorSidebar: NSView {
         noToolView.isHidden = mode != .none
         let isArrow = mode == .arrow
         let isText  = mode == .text
+        let isShape = mode == .shape
         arrowPropViews.forEach { $0.isHidden = !isArrow }
         textPropViews.forEach  { $0.isHidden = !isText }
+        shapePropViews.forEach { $0.isHidden = !isShape }
         if mode != .none && tabControl.selectedSegment != 0 {
             tabControl.selectedSegment = 0
             propertiesScroll.isHidden = false

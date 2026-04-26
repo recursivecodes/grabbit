@@ -69,7 +69,7 @@ func drawRabbit(ctx: CGContext, size: CGFloat) {
     ctx.fillEllipse(in: CGRect(x: cx - headR, y: headY - headR, width: headR*2, height: headR*2))
 
     // ── Eyes ──────────────────────────────────────────────────────────
-    let eyeY  = headY + s * 0.03
+    let eyeY  = headY - s * 0.03
     let eyeR: CGFloat  = s * 0.046
     let eyeLX = cx - s * 0.105
     let eyeRX = cx + s * 0.105
@@ -79,23 +79,23 @@ func drawRabbit(ctx: CGContext, size: CGFloat) {
         // Shine
         let sr = eyeR * 0.38
         ctx.setFillColor(white)
-        ctx.fillEllipse(in: CGRect(x: ex + eyeR*0.25 - sr, y: eyeY + eyeR*0.25 - sr, width: sr*2, height: sr*2))
+        ctx.fillEllipse(in: CGRect(x: ex + eyeR*0.25 - sr, y: eyeY - eyeR*0.25 - sr, width: sr*2, height: sr*2))
     }
 
     // ── Nose ──────────────────────────────────────────────────────────
-    let noseY = headY - s * 0.045
+    let noseY = headY + s * 0.045
     let noseR: CGFloat = s * 0.028
     ctx.setFillColor(pink)
     ctx.fillEllipse(in: CGRect(x: cx - noseR, y: noseY - noseR, width: noseR*2, height: noseR*2))
 
     // ── Smile ─────────────────────────────────────────────────────────
-    let smileY = noseY - s * 0.03
+    let smileY = noseY + s * 0.03
     let smileW: CGFloat = s * 0.10
     let smile = CGMutablePath()
     smile.move(to: CGPoint(x: cx - smileW, y: smileY))
     smile.addCurve(to: CGPoint(x: cx + smileW, y: smileY),
-                   control1: CGPoint(x: cx - smileW * 0.4, y: smileY - s * 0.045),
-                   control2: CGPoint(x: cx + smileW * 0.4, y: smileY - s * 0.045))
+                   control1: CGPoint(x: cx - smileW * 0.4, y: smileY + s * 0.045),
+                   control2: CGPoint(x: cx + smileW * 0.4, y: smileY + s * 0.045))
     ctx.setStrokeColor(darkGray)
     ctx.setLineWidth(s * 0.025)
     ctx.setLineCap(.round)
@@ -103,7 +103,7 @@ func drawRabbit(ctx: CGContext, size: CGFloat) {
 
     // ── Blush ─────────────────────────────────────────────────────────
     let blushW: CGFloat = s * 0.075; let blushH: CGFloat = s * 0.04
-    let blushY = eyeY - s * 0.055
+    let blushY = eyeY + s * 0.055
     ctx.setFillColor(blush)
     ctx.fillEllipse(in: CGRect(x: cx - s*0.22 - blushW*0.5, y: blushY, width: blushW, height: blushH))
     ctx.fillEllipse(in: CGRect(x: cx + s*0.22 - blushW*0.5, y: blushY, width: blushW, height: blushH))

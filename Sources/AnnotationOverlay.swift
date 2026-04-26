@@ -2,7 +2,26 @@ import AppKit
 
 // MARK: - Tool
 
-enum AnnotationTool { case none, arrow, text }
+enum AnnotationTool { case none, arrow, text, shape }
+
+// MARK: - ShapeType
+
+enum ShapeType {
+    case circle
+    case rectangle
+    case roundedRectangle
+}
+
+// MARK: - Shape
+
+struct Shape {
+    var id = UUID()
+    var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
+    var shapeType: ShapeType
+    var borderWeight: CGFloat
+    var borderColor: NSColor
+    var fillColor: NSColor
+}
 
 // MARK: - Arrow
 
@@ -62,12 +81,20 @@ class AnnotationOverlay: NSView {
     var currentOutlineColor: NSColor = .black
     var currentOutlineWeight: CGFloat = 2
 
+    // MARK: Shape state
+    var shapes: [Shape] = []
+    var currentShapeType:     ShapeType = .rectangle
+    var currentBorderWeight:  CGFloat = 2
+    var currentBorderColor:   NSColor = .black
+    var currentFillColor:     NSColor = .clear
+
     // MARK: Active tool
     var activeTool: AnnotationTool = .none {
         didSet {
             window?.invalidateCursorRects(for: self)
             if activeTool != .arrow { selectedArrowID = nil }
             if activeTool != .text  { finalizeEditing(); selectedTextID = nil }
+            if activeTool != .shape { finalizeShape(); selectedShapeID = nil }
             needsDisplay = true
         }
     }
@@ -92,6 +119,7 @@ class AnnotationOverlay: NSView {
             onTextSelectionChanged?(ann)
         }
     }
+    private var selectedShapeID: UUID?
 
     private enum DragState {
         case none
@@ -99,6 +127,9 @@ class AnnotationOverlay: NSView {
         case movingArrowWhole(index: Int, lastLoc: CGPoint)
         case movingArrowTail(index: Int)
         case movingText(index: Int, lastLoc: CGPoint)
+        case newShape(start: CGPoint, current: CGPoint)
+        case movingShapeWhole(index: Int, lastLoc: CGPoint)
+        case resizingShape(index: Int, start: CGPoint, originalRect: CGRect)
     }
     private var dragState: DragState = .none
 
@@ -131,6 +162,24 @@ class AnnotationOverlay: NSView {
         for ann in textAnnotations {
             guard ann.id != editingID else { continue }
             drawTextAnnotation(ann, selected: ann.id == selectedTextID)
+        }
+
+        // Shapes
+        for shape in shapes {
+            drawShape(shape, selected: shape.id == selectedShapeID)
+        }
+        if case .newShape(let s, let c) = dragState {
+            var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
+            rect = rect.standardized
+            drawShapeRect(rect, shapeType: currentShapeType,
+                         borderWeight: currentBorderWeight, borderColor: currentBorderColor,
+                         fillColor: currentFillColor, selected: false)
+        }
+        if let selID = selectedShapeID, let shape = shapes.first(where: { $0.id == selID }) {
+            drawShapeResizeHandle(at: toView(shape.rect.origin))
+            let brPoint = toView(CGPoint(x: shape.rect.origin.x + shape.rect.width,
+                                        y: shape.rect.origin.y))
+            drawShapeResizeHandleBottomRight(at: brPoint)
         }
     }
 
@@ -198,6 +247,71 @@ class AnnotationOverlay: NSView {
         NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
     }
 
+    private func drawShape(_ shape: Shape, selected: Bool) {
+        let viewRect = toView(shape.rect.origin)
+        let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
+                             height: shape.rect.height * imageDisplayRect.height)
+        var viewRectFinal = CGRect(origin: viewRect, size: viewSize)
+        viewRectFinal = viewRectFinal.standardized
+        drawShapeRect(viewRectFinal, shapeType: shape.shapeType,
+                     borderWeight: shape.borderWeight, borderColor: shape.borderColor,
+                     fillColor: shape.fillColor, selected: selected)
+    }
+
+    private func drawShapeRect(_ rect: CGRect, shapeType: ShapeType,
+                               borderWeight: CGFloat, borderColor: NSColor,
+                               fillColor: NSColor, selected: Bool) {
+        let path = NSBezierPath()
+        let r = rect.standardized
+
+        switch shapeType {
+        case .circle:
+            path.appendOval(in: r)
+        case .rectangle:
+            path.appendRect(r)
+        case .roundedRectangle:
+            path.appendRoundedRect(r, xRadius: 10, yRadius: 10)
+        }
+
+        // Fill
+        if fillColor.alphaComponent > 0 {
+            fillColor.setFill()
+            path.fill()
+        }
+
+        // Stroke
+        borderColor.setStroke()
+        path.lineWidth = borderWeight
+        path.stroke()
+
+        // Selection outline
+        if selected {
+            let selRect = CGRect(x: r.origin.x - 4, y: r.origin.y - 4,
+                                width: r.width + 8, height: r.height + 8)
+            let selPath = NSBezierPath(rect: selRect)
+            selPath.lineWidth = 1.5
+            NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
+            selPath.setLineDash([5, 3], count: 2, phase: 0)
+            selPath.stroke()
+        }
+    }
+
+    private func drawShapeResizeHandle(at point: CGPoint) {
+        let r: CGFloat = 7
+        let rect = CGRect(x: point.x - r, y: point.y - r, width: r*2, height: r*2)
+        let circle = NSBezierPath(ovalIn: rect)
+        NSColor.white.setFill(); circle.fill()
+        NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
+    }
+
+    private func drawShapeResizeHandleBottomRight(at point: CGPoint) {
+        let r: CGFloat = 7
+        let rect = CGRect(x: point.x - r, y: point.y - r, width: r*2, height: r*2)
+        let circle = NSBezierPath(ovalIn: rect)
+        NSColor.white.setFill(); circle.fill()
+        NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
+    }
+
     // MARK: - Cursor
 
     override func resetCursorRects() {
@@ -205,6 +319,7 @@ class AnnotationOverlay: NSView {
         switch activeTool {
         case .arrow: cursor = .crosshair
         case .text:  cursor = .iBeam
+        case .shape: cursor = .crosshair
         case .none:  cursor = .arrow
         }
         addCursorRect(bounds, cursor: cursor)
@@ -262,6 +377,31 @@ class AnnotationOverlay: NSView {
                 needsDisplay = true
             }
 
+        case .shape:
+            // Check if clicking on resize handle of selected shape first
+            if let selID = selectedShapeID,
+               let selIdx = shapes.firstIndex(where: { $0.id == selID }) {
+                let shape = shapes[selIdx]
+                let brPoint = toView(CGPoint(x: shape.rect.origin.x + shape.rect.width,
+                                            y: shape.rect.origin.y))
+                let handleRect = CGRect(x: brPoint.x - 7, y: brPoint.y - 7, width: 14, height: 14)
+                if handleRect.contains(loc) {
+                    dragState = .resizingShape(index: selIdx, start: loc, originalRect: shape.rect)
+                    needsDisplay = true
+                    break
+                }
+            }
+            // Otherwise check if clicking on any shape
+            if let idx = shapeIndex(near: loc) {
+                selectedShapeID = shapes[idx].id
+                dragState = .movingShapeWhole(index: idx, lastLoc: loc)
+                needsDisplay = true
+            } else {
+                dragState = .newShape(start: loc, current: loc)
+                selectedShapeID = nil
+                needsDisplay = true
+            }
+
         case .none: break
         }
     }
@@ -285,6 +425,28 @@ class AnnotationOverlay: NSView {
             textAnnotations[idx].position.x += d.x
             textAnnotations[idx].position.y += d.y
             dragState = .movingText(index: idx, lastLoc: loc); needsDisplay = true
+        case .movingShapeWhole(let idx, let last):
+            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
+            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
+            shapes[idx].rect.origin.x += d.x
+            shapes[idx].rect.origin.y += d.y
+            dragState = .movingShapeWhole(index: idx, lastLoc: loc); needsDisplay = true
+        case .newShape(let s, _):
+            dragState = .newShape(start: s, current: loc); needsDisplay = true
+        case .resizingShape(let idx, _, let origRect):
+            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
+            let origBR = toView(CGPoint(x: origRect.origin.x + origRect.width,
+                                       y: origRect.origin.y))
+            let dx = (loc.x - origBR.x) / r.width
+            let dy = (loc.y - origBR.y) / r.height
+            var newRect = origRect
+            newRect.size.width += dx
+            newRect.size.height += dy
+            // Clamp to minimum size
+            if newRect.size.width < 0.02 { newRect.size.width = 0.02 }
+            if newRect.size.height < 0.02 { newRect.size.height = 0.02 }
+            shapes[idx].rect = newRect
+            needsDisplay = true
         case .none: break
         }
     }
@@ -300,7 +462,25 @@ class AnnotationOverlay: NSView {
             } else {
                 selectedArrowID = nil
             }
-        case .movingArrowTail, .movingArrowWhole, .movingText:
+        case .newShape(let s, let c):
+            let size = CGSize(width: c.x - s.x, height: c.y - s.y)
+            if abs(size.width) > 8 || abs(size.height) > 8 {
+                var rect = CGRect(origin: s, size: size)
+                rect = rect.standardized
+                let normOrigin = toNorm(rect.origin)
+                let normRect = CGRect(x: normOrigin.x,
+                                     y: normOrigin.y,
+                                     width: rect.size.width / imageDisplayRect.width,
+                                     height: rect.size.height / imageDisplayRect.height)
+                let shape = Shape(rect: normRect, shapeType: currentShapeType,
+                                 borderWeight: currentBorderWeight,
+                                 borderColor: currentBorderColor,
+                                 fillColor: currentFillColor)
+                shapes.append(shape); selectedShapeID = shape.id; onChange?()
+            } else {
+                selectedShapeID = nil
+            }
+        case .movingArrowTail, .movingArrowWhole, .movingText, .movingShapeWhole, .resizingShape:
             onChange?()
         case .none: break
         }
@@ -408,6 +588,10 @@ class AnnotationOverlay: NSView {
     // Called before copy/save so the export captures any in-progress edit.
     func finalizeEditing() { _ = commitEdit() }
 
+    private func finalizeShape() {
+        selectedShapeID = nil
+    }
+
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
@@ -421,6 +605,10 @@ class AnnotationOverlay: NSView {
         } else if activeTool == .text, let id = selectedTextID, editingID == nil {
             textAnnotations.removeAll { $0.id == id }
             selectedTextID = nil
+            needsDisplay = true; onChange?()
+        } else if activeTool == .shape, let id = selectedShapeID {
+            shapes.removeAll { $0.id == id }
+            selectedShapeID = nil
             needsDisplay = true; onChange?()
         } else {
             super.keyDown(with: event)
@@ -444,6 +632,12 @@ class AnnotationOverlay: NSView {
             item.target = self; item.representedObject = textAnnotations[idx].id
             menu.addItem(.separator())
         }
+        if activeTool == .shape, let idx = shapeIndex(near: loc) {
+            let item = menu.addItem(withTitle: "Delete Shape",
+                                    action: #selector(menuDeleteShape(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = shapes[idx].id
+            menu.addItem(.separator())
+        }
         let copy = menu.addItem(withTitle: "Copy Image",
                                 action: #selector(menuCopy(_:)), keyEquivalent: "")
         copy.target = self
@@ -461,6 +655,13 @@ class AnnotationOverlay: NSView {
         guard let id = item.representedObject as? UUID else { return }
         textAnnotations.removeAll { $0.id == id }
         if selectedTextID == id { selectedTextID = nil }
+        needsDisplay = true; onChange?()
+    }
+
+    @objc private func menuDeleteShape(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID else { return }
+        shapes.removeAll { $0.id == id }
+        if selectedShapeID == id { selectedShapeID = nil }
         needsDisplay = true; onChange?()
     }
 
@@ -503,6 +704,21 @@ class AnnotationOverlay: NSView {
             if let v = fontColor { tv.textColor = v }
             resizeEditingView()
         }
+        needsDisplay = true
+    }
+
+    // MARK: - Update selected shape
+
+    func updateSelectedShape(shapeType: ShapeType? = nil,
+                             borderWeight: CGFloat? = nil,
+                             borderColor: NSColor? = nil,
+                             fillColor: NSColor? = nil) {
+        guard let id = selectedShapeID,
+              let idx = shapes.firstIndex(where: { $0.id == id }) else { return }
+        if let v = shapeType     { shapes[idx].shapeType     = v }
+        if let v = borderWeight  { shapes[idx].borderWeight  = v }
+        if let v = borderColor   { shapes[idx].borderColor   = v }
+        if let v = fillColor     { shapes[idx].fillColor     = v }
         needsDisplay = true
     }
 
@@ -553,6 +769,17 @@ class AnnotationOverlay: NSView {
                               width: sz.width + 12,
                               height: sz.height + 8)
             return rect.contains(point)
+        }
+    }
+
+    private func shapeIndex(near point: CGPoint) -> Int? {
+        shapes.indices.reversed().first { i in
+            let shape = shapes[i]
+            let viewRect = toView(shape.rect.origin)
+            let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
+                                 height: shape.rect.height * imageDisplayRect.height)
+            let viewRectFinal = CGRect(origin: viewRect, size: viewSize)
+            return viewRectFinal.contains(point)
         }
     }
 
