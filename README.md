@@ -1,8 +1,8 @@
 # Grabbit
 
 <img align="left" width="100" src="grabbit.png">
- A lightweight macOS screenshot and annotation tool that lives in your menu bar. Trigger a capture with a global hotkey, draw a selection, then annotate and export — all without touching the Dock. |
-
+ A lightweight macOS screenshot and annotation tool that lives in your menu bar. Trigger a capture with a global hotkey, draw a selection, then annotate and export — all without touching the Dock.
+<br clear="left"/>
 
 
 
