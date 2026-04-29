@@ -22,15 +22,31 @@
 
 ---
 
+## Installation
+
+Pre-built binaries are attached to each [GitHub Release](https://github.com/recursivecodes/grabbit/releases).
+
+1. Download **Grabbit.zip** from the latest release and unzip it.
+2. Move **Grabbit.app** to your `/Applications` folder.
+3. **Remove the quarantine attribute.** Because Grabbit is unsigned, macOS Gatekeeper will block it on first launch. Run this once in Terminal:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Grabbit.app
+   ```
+4. Open Grabbit from `/Applications` or Spotlight.
+
+> macOS will still ask for **Screen Recording** permission on first launch — this is required for the capture to work. You can also grant it manually in **System Settings → Privacy & Security → Screen Recording**.
+
+---
+
 ## Requirements
 
 - macOS 13 Ventura or later
-- Xcode command-line tools (`xcode-select --install`)
+- Xcode command-line tools (`xcode-select --install`) — for building from source only
 - Screen Recording permission (the app will prompt on first launch)
 
 ---
 
-## Building
+## Building from source
 
 ```bash
 bash build.sh
@@ -45,6 +61,15 @@ open build/Grabbit.app
 ```
 
 The build script uses `swiftc` directly — no Xcode project or Swift Package Manager required.
+
+### Releasing
+
+Push a version tag to trigger the GitHub Actions workflow, which builds the app and publishes a release with `Grabbit.zip` attached:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ---
 
