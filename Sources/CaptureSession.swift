@@ -37,8 +37,12 @@ class CaptureSession {
 
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let config = SCStreamConfiguration()
-                config.width  = display.width
-                config.height = display.height
+                // Use pixel dimensions (points × backing scale) so the CGImage
+                // is full-resolution and matches what finishCapture expects when
+                // it multiplies the selection rect by backingScaleFactor.
+                let scale = screen.backingScaleFactor
+                config.width  = Int(Double(display.width)  * scale)
+                config.height = Int(Double(display.height) * scale)
                 config.scalesToFit = false
                 config.showsCursor = false
 
