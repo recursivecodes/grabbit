@@ -1,13 +1,15 @@
 import AppKit
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDelegate {
     private var statusItem: NSStatusItem!
     private var hotkeyManager: HotkeyManager!
+    private var captureMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         setupStatusBar()
         hotkeyManager = HotkeyManager(callback: startCapture)
+        updateCaptureMenuTitle()
         requestScreenRecordingPermission()
     }
 
@@ -16,7 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // App menu (first item is always the application menu)
+        // App menu
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -26,7 +28,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // File menu
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: "File")
-        // Uppercase "S" → Cmd+Shift+S per AppKit convention
         fileMenu.addItem(withTitle: "Save As…", action: Selector(("saveAs:")), keyEquivalent: "S")
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -42,10 +43,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                            accessibilityDescription: "Grabbit")
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "Capture  ⌘⇧P", action: #selector(startCapture), keyEquivalent: "")
+
+        captureMenuItem = NSMenuItem(title: "", action: #selector(startCapture), keyEquivalent: "")
+        menu.addItem(captureMenuItem)
+
         menu.addItem(.separator())
+
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "")
+
+        menu.addItem(.separator())
+
         menu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+
         statusItem.menu = menu
+    }
+
+    /// Keeps the menu item title in sync with the current hotkey config.
+    private func updateCaptureMenuTitle() {
+        let shortcut = hotkeyManager.config.displayString
+        captureMenuItem.title = "Capture  \(shortcut)"
+        statusItem.button?.toolTip = "Grabbit (\(shortcut))"
     }
 
     // MARK: - Capture
@@ -58,5 +75,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func startCapture() {
         CaptureSession.start()
+    }
+
+    // MARK: - Settings
+
+    @objc private func openSettings() {
+        SettingsWindowController.show(currentConfig: hotkeyManager.config, delegate: self)
+    }
+
+    // MARK: - SettingsWindowControllerDelegate
+
+    func settingsDidUpdateHotkey(_ config: HotkeyConfig) {
+        hotkeyManager.update(config: config)
+        updateCaptureMenuTitle()
     }
 }
