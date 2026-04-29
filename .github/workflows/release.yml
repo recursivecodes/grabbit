@@ -9,6 +9,8 @@ jobs:
   build:
     name: Build Grabbit.app
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout

@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import ScreenCaptureKit
 
 class CaptureSession {
     static func start() {
@@ -13,20 +14,68 @@ class CaptureSession {
 
         guard let screen = NSScreen.main else { return }
 
-        // CGWindowListCreateImage captures the full display contents and is
-        // available on all supported macOS versions without deprecation.
-        let displayBounds = CGDisplayBounds(CGMainDisplayID())
-        guard let cgImage = CGWindowListCreateImage(
-            displayBounds,
-            .optionOnScreenOnly,
-            kCGNullWindowID,
-            .bestResolution
-        ) else {
-            NSLog("Grabbit: CGWindowListCreateImage returned nil")
+        // Use ScreenCaptureKit on macOS 14+. The capture is async internally
+        // but we dispatch back to the main queue for the overlay presentation.
+        if #available(macOS 14.0, *) {
+            captureWithSCK(screen: screen)
+        } else {
+            fallbackCapture(screen: screen)
+        }
+    }
+
+    // MARK: - ScreenCaptureKit path (macOS 14+)
+
+    @available(macOS 14.0, *)
+    private static func captureWithSCK(screen: NSScreen) {
+        Task {
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else {
+                    await MainActor.run { fallbackCapture(screen: screen) }
+                    return
+                }
+
+                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let config = SCStreamConfiguration()
+                config.width  = display.width
+                config.height = display.height
+                config.scalesToFit = false
+                config.showsCursor = false
+
+                let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                let screenshot = NSImage(cgImage: cgImage, size: screen.frame.size)
+
+                await MainActor.run {
+                    OverlayWindowController.show(screenshot: screenshot, screen: screen)
+                }
+            } catch {
+                NSLog("Grabbit: SCK capture failed: \(error)")
+                await MainActor.run { fallbackCapture(screen: screen) }
+            }
+        }
+    }
+
+    // MARK: - Fallback for macOS < 14
+
+    private static func fallbackCapture(screen: NSScreen) {
+        // CGDisplayCreateImage is available pre-macOS 15.
+        let displayID = CGMainDisplayID()
+        let selector = NSSelectorFromString("CGDisplayCreateImage:")
+        _ = selector  // suppress unused warning
+
+        // Use a temporary file via screencapture as the universal fallback.
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("grabbit_cap.png")
+        let task = Process()
+        task.launchPath = "/usr/sbin/screencapture"
+        task.arguments = ["-x", "-t", "png", tmp.path]
+        task.launch()
+        task.waitUntilExit()
+
+        guard let img = NSImage(contentsOf: tmp) else {
+            NSLog("Grabbit: fallback screencapture failed")
             return
         }
-
-        let screenshot = NSImage(cgImage: cgImage, size: screen.frame.size)
-        OverlayWindowController.show(screenshot: screenshot, screen: screen)
+        try? FileManager.default.removeItem(at: tmp)
+        OverlayWindowController.show(screenshot: img, screen: screen)
     }
 }

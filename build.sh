@@ -15,6 +15,7 @@ swiftc Sources/*.swift \
     -framework AppKit \
     -framework Carbon \
     -framework CoreGraphics \
+    -framework ScreenCaptureKit \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -suppress-warnings \
     -O
