@@ -13,11 +13,16 @@ class CaptureSession {
 
         guard let screen = NSScreen.main else { return }
 
-        // CGDisplayCreateImage is deprecated in macOS 14 but remains functional.
-        // Replace with ScreenCaptureKit when adding async capture support.
-        let displayID = CGMainDisplayID()
-        guard let cgImage = CGDisplayCreateImage(displayID) else {
-            NSLog("Grabbit: CGDisplayCreateImage returned nil")
+        // CGWindowListCreateImage captures the full display contents and is
+        // available on all supported macOS versions without deprecation.
+        let displayBounds = CGDisplayBounds(CGMainDisplayID())
+        guard let cgImage = CGWindowListCreateImage(
+            displayBounds,
+            .optionOnScreenOnly,
+            kCGNullWindowID,
+            .bestResolution
+        ) else {
+            NSLog("Grabbit: CGWindowListCreateImage returned nil")
             return
         }
 

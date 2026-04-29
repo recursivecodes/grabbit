@@ -16,6 +16,7 @@ swiftc Sources/*.swift \
     -framework Carbon \
     -framework CoreGraphics \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
+    -suppress-warnings \
     -O
 
 cp Resources/Info.plist "$BUNDLE/Contents/"
