@@ -32,6 +32,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
 
+        // Edit menu — required for Cmd+Z/Shift+Cmd+Z to flow through the responder chain
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+
         NSApp.mainMenu = mainMenu
     }
 

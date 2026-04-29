@@ -60,7 +60,7 @@ private func saveString(_ value: String, key: String) {
 
 // MARK: - Tool mode
 
-private enum ToolMode { case none, arrow, text, shape }
+private enum ToolMode { case none, arrow, text, shape, crop }
 
 // MARK: - EditorWindowController
 
@@ -70,6 +70,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: State
 
     private let originalImage: NSImage
+    private var currentImage: NSImage          // tracks the working image (after crops)
     private var borderWeight:      CGFloat
     private var borderColor:       NSColor
     private var shadowOffsetX:     CGFloat
@@ -104,6 +105,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var textToolButton:          NSButton!
     private var zoomScroll:              NSScrollView!
     private var zoomLabel:              NSTextField!
+    private var cropToolButton:          NSButton!
+    private var cropOverlay:             CropOverlayView!
 
     private var borderWeightSlider:      NSSlider!;   private var borderWeightLabel:      NSTextField!
     private var borderColorWell:         NSColorWell!
@@ -141,6 +144,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     init(image: NSImage) {
         self.originalImage = image
+        self.currentImage  = image
 
         borderWeight       = CGFloat(loadDouble(Prefs.borderWeight,      default: 0))
         borderColor        = loadColor(Prefs.borderColor,                 default: .black)
@@ -227,8 +231,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let arrowBtn = makeToolButton("Arrow")
         let textBtn  = makeToolButton("Text")
         let shapeBtn = makeToolButton("Shape")
+        let cropBtn  = makeToolButton("Crop")
+        cropBtn.toolTip = "Crop image"
 
-        let toolsStack = NSStackView(views: [arrowBtn, textBtn, shapeBtn])
+        let toolsStack = NSStackView(views: [cropBtn, arrowBtn, textBtn, shapeBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -272,7 +278,18 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             zoomStack.centerYAnchor.constraint(equalTo: cv.topAnchor, constant: tbH / 2),
         ])
 
-        // ── Sidebar controls ─────────────────────────────────────────────────────
+        // ── Crop overlay ─────────────────────────────────────────────────────────
+        let co = CropOverlayView()
+        co.translatesAutoresizingMaskIntoConstraints = false
+        co.isHidden = true
+        zoomDoc.addSubview(co)
+        NSLayoutConstraint.activate([
+            co.topAnchor.constraint(equalTo: iv.topAnchor),
+            co.bottomAnchor.constraint(equalTo: iv.bottomAnchor),
+            co.leadingAnchor.constraint(equalTo: iv.leadingAnchor),
+            co.trailingAnchor.constraint(equalTo: iv.trailingAnchor),
+        ])
+
         let bwSlider = sld(0, 50,  Double(borderWeight));    let bwLabel = vlbl(fmt(borderWeight))
         let bcWell   = well(borderColor)
         let bToggle  = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -359,6 +376,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
         arrowToolButton = arrowBtn;  textToolButton = textBtn
         zoomScroll = zs;  zoomLabel = zl
+        cropToolButton = cropBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
         borderWeightSlider = bwSlider;       borderWeightLabel = bwLabel;       borderColorWell = bcWell
         shadowXSlider = sxSlider;            shadowXLabel = sxLabel
@@ -382,6 +400,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         arrowBtn.target             = self; arrowBtn.action             = #selector(toggleArrowTool(_:))
         textBtn.target              = self; textBtn.action              = #selector(toggleTextTool(_:))
         shapeBtn.target             = self; shapeBtn.action             = #selector(toggleShapeTool(_:))
+        cropBtn.target              = self; cropBtn.action              = #selector(toggleCropTool(_:))
         zoomInBtn.target            = self; zoomInBtn.action            = #selector(zoomIn)
         zoomOutBtn.target           = self; zoomOutBtn.action           = #selector(zoomOut)
         borderToggle.target         = self; borderToggle.action         = #selector(borderToggleChanged(_:))
@@ -433,8 +452,20 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
             return Self.imageDisplayRect(for: img, in: iv)
         }
+        co.imageDisplayRectProvider = { [weak self] in
+            guard let iv = self?.captureView, let img = iv.image else { return .zero }
+            return Self.imageDisplayRect(for: img, in: iv)
+        }
         annotationOverlay.onCopy   = { [weak self] in self?.copyToClipboard() }
         annotationOverlay.onChange = { [weak self] in self?.refreshForExport() }
+
+        // ── Crop overlay wiring ──────────────────────────────────────────────────
+        co.onCropConfirmed = { [weak self] normRect in
+            self?.applyCrop(normRect: normRect)
+        }
+        co.onCropCancelled = { [weak self] in
+            self?.deactivateCropTool()
+        }
 
         annotationOverlay.onTextSelectionChanged = { [weak self] ann in
             guard let self else { return }
@@ -518,6 +549,87 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             annotationOverlay.activeTool = .none
         }
         sidebar.setToolMode(toolMode)
+    }
+
+    @objc private func toggleCropTool(_ sender: NSButton) {
+        if sender.state == .on {
+            toolMode = .crop
+            arrowToolButton.state = .off
+            textToolButton.state  = .off
+            annotationOverlay.activeTool = .none
+            cropOverlay.isHidden = false
+            cropOverlay.reset()
+            window?.makeFirstResponder(cropOverlay)
+        } else {
+            deactivateCropTool()
+        }
+        sidebar.setToolMode(toolMode)
+    }
+
+    private func deactivateCropTool() {
+        toolMode = .none
+        cropToolButton.state = .off
+        cropOverlay.isHidden = true
+        cropOverlay.reset()
+        sidebar.setToolMode(toolMode)
+    }
+
+    private func applyCrop(normRect: CGRect) {
+        // normRect is in 0-1 space relative to the displayed image rect.
+        // Convert to pixel coordinates in the current working image.
+        let img = currentImage
+        let pixelRect = CGRect(
+            x: normRect.origin.x * img.size.width,
+            y: normRect.origin.y * img.size.height,
+            width: normRect.size.width * img.size.width,
+            height: normRect.size.height * img.size.height
+        ).integral
+
+        guard pixelRect.width > 1, pixelRect.height > 1 else {
+            deactivateCropTool(); return
+        }
+
+        // Register undo — capture the pre-crop image now, before we overwrite currentImage.
+        let imageBeforeCrop = currentImage
+        window?.undoManager?.registerUndo(withTarget: self, handler: { target in
+            target.swapCropImage(to: imageBeforeCrop)
+        })
+        window?.undoManager?.setActionName("Crop")
+
+        // Perform the crop.
+        let cropped = NSImage(size: pixelRect.size)
+        cropped.lockFocus()
+        // normRect.origin.y is already y=0-at-bottom (same as NSImage coordinate space),
+        // so use it directly as the source origin — no flip needed.
+        let srcRect = CGRect(
+            x: pixelRect.origin.x,
+            y: pixelRect.origin.y,
+            width: pixelRect.width,
+            height: pixelRect.height
+        )
+        img.draw(in: CGRect(origin: .zero, size: pixelRect.size),
+                 from: srcRect,
+                 operation: .copy,
+                 fraction: 1.0)
+        cropped.unlockFocus()
+
+        currentImage = cropped
+        captureView.image = cropped
+        annotationOverlay.needsDisplay = true
+
+        deactivateCropTool()
+    }
+
+    @objc private func swapCropImage(to image: NSImage) {
+        // Capture current before overwriting so redo can restore it.
+        let previous = currentImage
+        window?.undoManager?.registerUndo(withTarget: self, handler: { target in
+            target.swapCropImage(to: previous)
+        })
+        window?.undoManager?.setActionName("Crop")
+        currentImage = image
+        captureView.image = image
+        annotationOverlay.needsDisplay = true
     }
 
     @objc private func zoomIn() {
@@ -703,7 +815,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Refresh
 
     private func refreshBaseImage() {
-        captureView.image = (borderEnabled && borderWeight > 0) ? withBorder(originalImage) : originalImage
+        captureView.image = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
         annotationOverlay.needsDisplay = true
     }
 
@@ -724,7 +836,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Rendering
 
     private func rendered() -> NSImage {
-        var img = (borderEnabled && borderWeight > 0) ? withBorder(originalImage) : originalImage
+        var img = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
         img = withArrows(img)
         img = withTexts(img)
         img = withShapes(img)
@@ -1272,3 +1384,203 @@ private func vlbl(_ text: String) -> NSTextField {
 
 private func fmt(_ v: CGFloat) -> String { "\(Int(v))" }
 private func fmtPct(_ v: CGFloat) -> String { "\(Int(v * 100))%" }
+
+// MARK: - CropOverlayView
+
+class CropOverlayView: NSView {
+
+    // Called with a normalized rect (0-1 in image space, y=0 at bottom) when user confirms.
+    var onCropConfirmed: ((CGRect) -> Void)?
+    var onCropCancelled: (() -> Void)?
+
+    // imageDisplayRectProvider mirrors the one on AnnotationOverlay.
+    var imageDisplayRectProvider: (() -> CGRect)?
+
+    private enum CropDragState { case idle, dragging(start: CGPoint, current: CGPoint), selected(rect: CGRect) }
+    private var dragState: CropDragState = .idle
+
+    override var acceptsFirstResponder: Bool { true }
+    override var isFlipped: Bool { false }
+
+    // MARK: - Public
+
+    func reset() {
+        dragState = .idle
+        needsDisplay = true
+    }
+
+    // MARK: - Drawing
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        // Only operate within the actual rendered image rect, not the full padded view.
+        let imgRect = imageDisplayRect
+
+        // Dim only the image area.
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+        ctx.fill(imgRect)
+
+        let selRect: CGRect?
+        switch dragState {
+        case .dragging(let s, let c):
+            selRect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y)).standardized
+        case .selected(let r):
+            selRect = r
+        case .idle:
+            selRect = nil
+        }
+
+        if let r = selRect {
+            // Clear the selected area (restores the image underneath).
+            ctx.clear(r)
+
+            // Draw a bright border around the selection.
+            let borderPath = NSBezierPath(rect: r)
+            borderPath.lineWidth = 1.5
+            NSColor.white.setStroke()
+            borderPath.stroke()
+
+            // Draw rule-of-thirds grid inside selection.
+            NSColor.white.withAlphaComponent(0.3).setStroke()
+            let thirdW = r.width / 3
+            let thirdH = r.height / 3
+            for i in 1...2 {
+                let vLine = NSBezierPath()
+                vLine.move(to: CGPoint(x: r.minX + thirdW * CGFloat(i), y: r.minY))
+                vLine.line(to: CGPoint(x: r.minX + thirdW * CGFloat(i), y: r.maxY))
+                vLine.lineWidth = 0.5
+                vLine.stroke()
+                let hLine = NSBezierPath()
+                hLine.move(to: CGPoint(x: r.minX, y: r.minY + thirdH * CGFloat(i)))
+                hLine.line(to: CGPoint(x: r.maxX, y: r.minY + thirdH * CGFloat(i)))
+                hLine.lineWidth = 0.5
+                hLine.stroke()
+            }
+
+            // Corner handles.
+            let corners: [CGPoint] = [
+                CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY),
+            ]
+            let handleLen: CGFloat = 12
+            let handleW: CGFloat = 2.5
+            NSColor.white.setStroke()
+            for corner in corners {
+                let hx = NSBezierPath()
+                let dirX: CGFloat = corner.x == r.minX ? 1 : -1
+                let dirY: CGFloat = corner.y == r.minY ? 1 : -1
+                hx.move(to: corner)
+                hx.line(to: CGPoint(x: corner.x + dirX * handleLen, y: corner.y))
+                hx.lineWidth = handleW; hx.stroke()
+                let hy = NSBezierPath()
+                hy.move(to: corner)
+                hy.line(to: CGPoint(x: corner.x, y: corner.y + dirY * handleLen))
+                hy.lineWidth = handleW; hy.stroke()
+            }
+
+            // "Crop" / "Cancel" hint labels when selection is complete.
+            if case .selected = dragState {
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: NSColor.white,
+                ]
+                let confirmStr = NSAttributedString(string: "↵ Crop   Esc Cancel", attributes: attrs)
+                let sz = confirmStr.size()
+                let labelPt = CGPoint(x: r.midX - sz.width / 2,
+                                      y: r.minY - sz.height - 8)
+                if labelPt.y > imgRect.minY + 4 {
+                    confirmStr.draw(at: labelPt)
+                } else {
+                    confirmStr.draw(at: CGPoint(x: r.midX - sz.width / 2, y: r.maxY + 8))
+                }
+            }
+        }
+    }
+
+    // MARK: - Cursor
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    // MARK: - Mouse
+
+    override func mouseDown(with event: NSEvent) {
+        let raw = convert(event.locationInWindow, from: nil)
+        let loc = raw.clamped(to: imageDisplayRect)
+        dragState = .dragging(start: loc, current: loc)
+        needsDisplay = true
+        window?.makeFirstResponder(self)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let raw = convert(event.locationInWindow, from: nil)
+        let loc = raw.clamped(to: imageDisplayRect)
+        if case .dragging(let s, _) = dragState {
+            dragState = .dragging(start: s, current: loc)
+            needsDisplay = true
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let raw = convert(event.locationInWindow, from: nil)
+        let loc = raw.clamped(to: imageDisplayRect)
+        if case .dragging(let s, _) = dragState {
+            let r = CGRect(origin: s, size: CGSize(width: loc.x - s.x, height: loc.y - s.y)).standardized
+            if r.width > 8 && r.height > 8 {
+                dragState = .selected(rect: r)
+            } else {
+                dragState = .idle
+            }
+            needsDisplay = true
+        }
+    }
+
+    // MARK: - Keyboard
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 36, 76: // Return / Enter
+            confirmCrop()
+        case 53: // Escape
+            onCropCancelled?()
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    private func confirmCrop() {
+        guard case .selected(let viewRect) = dragState else { return }
+        // Convert view rect to normalized image coordinates.
+        let imgRect = imageDisplayRect
+        guard imgRect.width > 0, imgRect.height > 0 else { return }
+
+        // Clamp to image bounds.
+        let clamped = viewRect.intersection(imgRect)
+        guard clamped.width > 4, clamped.height > 4 else { return }
+
+        // Normalize relative to image display rect. y=0 at bottom.
+        let normX = (clamped.minX - imgRect.minX) / imgRect.width
+        let normY = (clamped.minY - imgRect.minY) / imgRect.height
+        let normW = clamped.width  / imgRect.width
+        let normH = clamped.height / imgRect.height
+
+        onCropConfirmed?(CGRect(x: normX, y: normY, width: normW, height: normH))
+    }
+
+    private var imageDisplayRect: CGRect {
+        imageDisplayRectProvider?() ?? bounds
+    }
+}
+
+// MARK: - CGPoint clamp helper
+
+private extension CGPoint {
+    func clamped(to rect: CGRect) -> CGPoint {
+        CGPoint(
+            x: max(rect.minX, min(rect.maxX, x)),
+            y: max(rect.minY, min(rect.maxY, y))
+        )
+    }
+}
