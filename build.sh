@@ -10,6 +10,9 @@ rm -rf "$BUNDLE"
 mkdir -p "$MACOS" "$BUNDLE/Contents/Resources"
 
 echo "Compiling..."
+ARCH=$(uname -m)  # arm64 or x86_64
+TARGET="${ARCH}-apple-macos13.0"
+
 swiftc Sources/*.swift \
     -o "$MACOS/$APP" \
     -framework AppKit \
@@ -17,6 +20,7 @@ swiftc Sources/*.swift \
     -framework CoreGraphics \
     -framework ScreenCaptureKit \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
+    -target "$TARGET" \
     -suppress-warnings \
     -O
 
