@@ -2,66 +2,6 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-// MARK: - Preference keys
-
-private enum Prefs {
-    static let borderWeight      = "grabbit.borderWeight"
-    static let borderColor       = "grabbit.borderColor"
-    static let shadowX           = "grabbit.shadowX"
-    static let shadowY           = "grabbit.shadowY"
-    static let shadowBlur        = "grabbit.shadowBlur"
-    static let shadowColor       = "grabbit.shadowColor"
-    static let shadowOpacity     = "grabbit.shadowOpacity"
-    static let arrowWeight       = "grabbit.arrowWeight"
-    static let arrowColor        = "grabbit.arrowColor"
-    static let borderEnabled     = "grabbit.borderEnabled"
-    static let shadowEnabled     = "grabbit.shadowEnabled"
-    static let textFontName      = "grabbit.textFontName"
-    static let textFontSize      = "grabbit.textFontSize"
-    static let textFontColor     = "grabbit.textFontColor"
-    static let textOutlineColor  = "grabbit.textOutlineColor"
-    static let textOutlineWeight = "grabbit.textOutlineWeight"
-    static let shapeBorderWeight = "grabbit.shapeBorderWeight"
-    static let shapeBorderColor  = "grabbit.shapeBorderColor"
-    static let shapeFillColor    = "grabbit.shapeFillColor"
-}
-
-// MARK: - UserDefaults helpers
-
-private func loadDouble(_ key: String, default def: Double) -> Double {
-    UserDefaults.standard.object(forKey: key) != nil
-        ? UserDefaults.standard.double(forKey: key) : def
-}
-
-private func loadColor(_ key: String, default def: NSColor) -> NSColor {
-    guard let data = UserDefaults.standard.data(forKey: key),
-          let c = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: data)
-    else { return def }
-    return c
-}
-
-private func loadString(_ key: String, default def: String) -> String {
-    UserDefaults.standard.string(forKey: key) ?? def
-}
-
-private func saveDouble(_ value: Double, key: String) {
-    UserDefaults.standard.set(value, forKey: key)
-}
-
-private func saveColor(_ color: NSColor, key: String) {
-    if let data = try? NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: true) {
-        UserDefaults.standard.set(data, forKey: key)
-    }
-}
-
-private func saveString(_ value: String, key: String) {
-    UserDefaults.standard.set(value, forKey: key)
-}
-
-// MARK: - Tool mode
-
-private enum ToolMode { case none, arrow, text, shape, crop }
-
 // MARK: - EditorWindowController
 
 class EditorWindowController: NSWindowController, NSWindowDelegate {
@@ -69,44 +9,44 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: State
 
-    private let originalImage: NSImage
-    private var currentImage: NSImage          // tracks the working image (after crops)
-    private var borderWeight:      CGFloat
-    private var borderColor:       NSColor
-    private var shadowOffsetX:     CGFloat
-    private var shadowOffsetY:     CGFloat
-    private var shadowBlur:        CGFloat
-    private var shadowColor:       NSColor
-    private var shadowOpacity:     CGFloat
-    private var arrowWeight:       CGFloat
-    private var arrowColor:        NSColor
-    private var borderEnabled:     Bool
-    private var shadowEnabled:     Bool
-    private var textFontName:      String
-    private var textFontSize:      CGFloat
-    private var textFontColor:     NSColor
-    private var textOutlineColor:  NSColor
-    private var textOutlineWeight: CGFloat
+    let originalImage: NSImage
+    var currentImage: NSImage          // tracks the working image (after crops)
+    var borderWeight:      CGFloat
+    var borderColor:       NSColor
+    var shadowOffsetX:     CGFloat
+    var shadowOffsetY:     CGFloat
+    var shadowBlur:        CGFloat
+    var shadowColor:       NSColor
+    var shadowOpacity:     CGFloat
+    var arrowWeight:       CGFloat
+    var arrowColor:        NSColor
+    var borderEnabled:     Bool
+    var shadowEnabled:     Bool
+    var textFontName:      String
+    var textFontSize:      CGFloat
+    var textFontColor:     NSColor
+    var textOutlineColor:  NSColor
+    var textOutlineWeight: CGFloat
     private var toolMode: ToolMode = .none
 
     // Shape state
     private var shapeType:        ShapeType = .rectangle
-    private var shapeBorderWeight: CGFloat = 2
-    private var shapeBorderColor: NSColor = .black
-    private var shapeFillColor:   NSColor = .clear
+    var shapeBorderWeight: CGFloat = 2
+    var shapeBorderColor: NSColor = .black
+    var shapeFillColor:   NSColor = .clear
 
     // MARK: Views
 
-    private var captureView:             NSImageView!
-    private var annotationOverlay:       AnnotationOverlay!
-    private var canvas:                  CanvasView!
-    private var sidebar:                 TabbedEditorSidebar!
-    private var arrowToolButton:         NSButton!
-    private var textToolButton:          NSButton!
-    private var zoomScroll:              NSScrollView!
-    private var zoomLabel:              NSTextField!
-    private var cropToolButton:          NSButton!
-    private var cropOverlay:             CropOverlayView!
+    var captureView:             NSImageView!
+    var annotationOverlay:       AnnotationOverlay!
+    private var canvas:          CanvasView!
+    private var sidebar:         TabbedEditorSidebar!
+    private var arrowToolButton: NSButton!
+    private var textToolButton:  NSButton!
+    private var zoomScroll:      NSScrollView!
+    private var zoomLabel:       NSTextField!
+    private var cropToolButton:  NSButton!
+    var cropOverlay:             CropOverlayView!
 
     private var borderWeightSlider:      NSSlider!;   private var borderWeightLabel:      NSTextField!
     private var borderColorWell:         NSColorWell!
@@ -475,7 +415,6 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
                 self.textFontColor     = ann.fontColor
                 self.textOutlineColor  = ann.outlineColor
                 self.textOutlineWeight = ann.outlineWeight
-                // Propagate to current defaults so new annotations inherit.
                 self.annotationOverlay.currentFontName      = ann.fontName
                 self.annotationOverlay.currentFontSize      = ann.fontSize
                 self.annotationOverlay.currentFontColor     = ann.fontColor
@@ -575,8 +514,6 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func applyCrop(normRect: CGRect) {
-        // normRect is in 0-1 space relative to the displayed image rect.
-        // Convert to pixel coordinates in the current working image.
         let img = currentImage
         let pixelRect = CGRect(
             x: normRect.origin.x * img.size.width,
@@ -589,18 +526,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             deactivateCropTool(); return
         }
 
-        // Register undo — capture the pre-crop image now, before we overwrite currentImage.
         let imageBeforeCrop = currentImage
         window?.undoManager?.registerUndo(withTarget: self, handler: { target in
             target.swapCropImage(to: imageBeforeCrop)
         })
         window?.undoManager?.setActionName("Crop")
 
-        // Perform the crop.
         let cropped = NSImage(size: pixelRect.size)
         cropped.lockFocus()
-        // normRect.origin.y is already y=0-at-bottom (same as NSImage coordinate space),
-        // so use it directly as the source origin — no flip needed.
         let srcRect = CGRect(
             x: pixelRect.origin.x,
             y: pixelRect.origin.y,
@@ -621,7 +554,6 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func swapCropImage(to image: NSImage) {
-        // Capture current before overwriting so redo can restore it.
         let previous = currentImage
         window?.undoManager?.registerUndo(withTarget: self, handler: { target in
             target.swapCropImage(to: previous)
@@ -814,12 +746,12 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Refresh
 
-    private func refreshBaseImage() {
+    func refreshBaseImage() {
         captureView.image = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
         annotationOverlay.needsDisplay = true
     }
 
-    private func refreshShadow() {
+    func refreshShadow() {
         captureView.wantsLayer = true
         canvas.wantsLayer = true
         canvas.layer?.masksToBounds = false
@@ -832,125 +764,6 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshForExport() {}
-
-    // MARK: - Rendering
-
-    private func rendered() -> NSImage {
-        var img = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
-        img = withArrows(img)
-        img = withTexts(img)
-        img = withShapes(img)
-        if shadowEnabled && shadowOpacity > 0 { img = withShadow(img) }
-        return img
-    }
-
-    private func withBorder(_ base: NSImage) -> NSImage {
-        let w = borderWeight
-        let out = NSImage(size: NSSize(width: base.size.width + w*2, height: base.size.height + w*2))
-        out.lockFocus()
-        borderColor.setFill()
-        NSRect(origin: .zero, size: out.size).fill()
-        base.draw(in: NSRect(x: w, y: w, width: base.size.width, height: base.size.height))
-        out.unlockFocus()
-        return out
-    }
-
-    private func withArrows(_ base: NSImage) -> NSImage {
-        guard !annotationOverlay.arrows.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        let displayW = annotationOverlay.imageDisplayRect.width
-        let scale = displayW > 0 ? base.size.width / displayW : 1
-        for arrow in annotationOverlay.arrows {
-            let s = CGPoint(x: arrow.start.x * base.size.width,  y: arrow.start.y * base.size.height)
-            let e = CGPoint(x: arrow.end.x   * base.size.width,  y: arrow.end.y   * base.size.height)
-            annotationOverlay.renderArrow(from: s, to: e,
-                                          weight: arrow.weight * scale, color: arrow.color)
-        }
-        out.unlockFocus()
-        return out
-    }
-
-    private func withTexts(_ base: NSImage) -> NSImage {
-        let texts = annotationOverlay.textAnnotations.filter { !$0.content.isEmpty }
-        guard !texts.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        let displayW = annotationOverlay.imageDisplayRect.width
-        let scale = displayW > 0 ? base.size.width / displayW : 1
-        for ann in texts {
-            let pt   = CGPoint(x: ann.position.x * base.size.width,
-                               y: ann.position.y * base.size.height)
-            let font = NSFont.boldSystemFont(ofSize: ann.fontSize * scale)
-            if ann.outlineWeight > 0 {
-                makeTextAttrStr(ann.content, font: font,
-                                fontColor: .clear, outlineColor: ann.outlineColor,
-                                outlineWeight: ann.outlineWeight * scale, strokeOnly: true)
-                    .draw(at: pt)
-            }
-            makeTextAttrStr(ann.content, font: font,
-                            fontColor: ann.fontColor, outlineColor: ann.outlineColor,
-                            outlineWeight: ann.outlineWeight * scale, strokeOnly: false)
-                .draw(at: pt)
-        }
-        out.unlockFocus()
-        return out
-    }
-
-    private func withShapes(_ base: NSImage) -> NSImage {
-        let shapes = annotationOverlay.shapes
-        guard !shapes.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        let displayW = annotationOverlay.imageDisplayRect.width
-        let scale = displayW > 0 ? base.size.width / displayW : 1
-        for shape in shapes {
-            let origin = CGPoint(x: shape.rect.origin.x * base.size.width,
-                                y: shape.rect.origin.y * base.size.height)
-            let size = CGSize(width: shape.rect.size.width * base.size.width,
-                             height: shape.rect.size.height * base.size.height)
-            var rect = CGRect(origin: origin, size: size)
-            rect = rect.standardized
-            let path = NSBezierPath()
-            switch shape.shapeType {
-            case .circle:
-                path.appendOval(in: rect)
-            case .rectangle:
-                path.appendRect(rect)
-            case .roundedRectangle:
-                path.appendRoundedRect(rect, xRadius: 10 * scale, yRadius: 10 * scale)
-            }
-            // Fill
-            if shape.fillColor.alphaComponent > 0 {
-                shape.fillColor.setFill()
-                path.fill()
-            }
-            // Stroke
-            shape.borderColor.setStroke()
-            path.lineWidth = shape.borderWeight * scale
-            path.stroke()
-        }
-        out.unlockFocus()
-        return out
-    }
-
-    private func withShadow(_ base: NSImage) -> NSImage {
-        let blur = shadowBlur
-        let pad  = blur * 2 + max(abs(shadowOffsetX), abs(shadowOffsetY)) + 8
-        let out  = NSImage(size: NSSize(width: base.size.width + pad*2, height: base.size.height + pad*2))
-        out.lockFocus()
-        let sh = NSShadow()
-        sh.shadowBlurRadius = blur
-        sh.shadowOffset     = NSSize(width: shadowOffsetX, height: shadowOffsetY)
-        sh.shadowColor      = shadowColor.withAlphaComponent(shadowOpacity)
-        sh.set()
-        base.draw(in: NSRect(x: pad, y: pad, width: base.size.width, height: base.size.height))
-        out.unlockFocus()
-        return out
-    }
 
     // MARK: - Clipboard / write
 
@@ -994,593 +807,5 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let scale = min(1.0, min(vw / iw, vh / ih))
         let sw = iw * scale, sh = ih * scale
         return CGRect(x: (vw - sw) / 2, y: (vh - sh) / 2, width: sw, height: sh)
-    }
-}
-
-// MARK: - Tabbed sidebar
-
-private class TabbedEditorSidebar: NSView {
-    private let tabControl:       NSSegmentedControl
-    private let propertiesScroll: NSScrollView
-    private let effectsScroll:    NSScrollView
-    private let effectsStack:     NSStackView
-    private let propertiesStack:  NSStackView
-    private var noToolView:       NSView!
-    private var arrowPropViews:   [NSView] = []
-    private var textPropViews:    [NSView] = []
-    private var shapePropViews:   [NSView] = []
-
-    init(
-        arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
-        textFontPopup: NSPopUpButton,
-        textFontSizeSlider: NSSlider, textFontSizeLabel: NSTextField,
-        textFontColorWell: NSColorWell,
-        textOutlineColorWell: NSColorWell,
-        textOutlineWeightSlider: NSSlider, textOutlineWeightLabel: NSTextField,
-        shapeTypePopup: NSPopUpButton,
-        shapeBorderWeightSlider: NSSlider, shapeBorderWeightLabel: NSTextField,
-        shapeBorderColorWell: NSColorWell,
-        shapeFillColorWell: NSColorWell
-    ) {
-        tabControl = NSSegmentedControl(
-            labels: ["Properties", "Effects"],
-            trackingMode: .selectOne, target: nil, action: nil
-        )
-        tabControl.selectedSegment = 0
-        tabControl.controlSize = .small
-        tabControl.translatesAutoresizingMaskIntoConstraints = false
-
-        effectsStack = NSStackView()
-        effectsStack.orientation = .vertical
-        effectsStack.alignment = .left
-        effectsStack.spacing = 0
-        effectsStack.translatesAutoresizingMaskIntoConstraints = false
-
-        propertiesStack = NSStackView()
-        propertiesStack.orientation = .vertical
-        propertiesStack.alignment = .left
-        propertiesStack.spacing = 0
-        propertiesStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let ps = NSScrollView()
-        ps.hasVerticalScroller = true; ps.autohidesScrollers = true
-        ps.drawsBackground = false
-        ps.translatesAutoresizingMaskIntoConstraints = false
-        let pClip = FlippedClipView()
-        pClip.drawsBackground = false
-        ps.contentView = pClip
-        ps.documentView = propertiesStack
-        propertiesScroll = ps
-
-        let es = NSScrollView()
-        es.hasVerticalScroller = true; es.autohidesScrollers = true
-        es.drawsBackground = false
-        es.translatesAutoresizingMaskIntoConstraints = false
-        let eClip = FlippedClipView()
-        eClip.drawsBackground = false
-        es.contentView = eClip
-        es.documentView = effectsStack
-        effectsScroll = es
-
-        super.init(frame: .zero)
-
-        wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.97, alpha: 1).cgColor
-
-        let sep = NSBox()
-        sep.boxType = .custom
-        sep.borderWidth = 0
-        sep.fillColor = NSColor.separatorColor
-        sep.cornerRadius = 0
-        sep.translatesAutoresizingMaskIntoConstraints = false
-
-        let tabDivider = NSBox()
-        tabDivider.boxType = .separator
-        tabDivider.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(sep)
-        addSubview(tabControl)
-        addSubview(tabDivider)
-        addSubview(propertiesScroll)
-        addSubview(effectsScroll)
-
-        NSLayoutConstraint.activate([
-            sep.topAnchor.constraint(equalTo: topAnchor),
-            sep.bottomAnchor.constraint(equalTo: bottomAnchor),
-            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
-            sep.widthAnchor.constraint(equalToConstant: 1),
-
-            tabControl.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            tabControl.leadingAnchor.constraint(equalTo: sep.trailingAnchor, constant: 10),
-            tabControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-
-            tabDivider.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 8),
-            tabDivider.heightAnchor.constraint(equalToConstant: 1),
-            tabDivider.leadingAnchor.constraint(equalTo: sep.trailingAnchor),
-            tabDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            propertiesScroll.topAnchor.constraint(equalTo: tabDivider.bottomAnchor),
-            propertiesScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            propertiesScroll.leadingAnchor.constraint(equalTo: sep.trailingAnchor),
-            propertiesScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            effectsScroll.topAnchor.constraint(equalTo: tabDivider.bottomAnchor),
-            effectsScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            effectsScroll.leadingAnchor.constraint(equalTo: sep.trailingAnchor),
-            effectsScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            propertiesStack.topAnchor.constraint(equalTo: pClip.topAnchor),
-            propertiesStack.leadingAnchor.constraint(equalTo: pClip.leadingAnchor),
-            propertiesStack.widthAnchor.constraint(equalTo: pClip.widthAnchor),
-            effectsStack.topAnchor.constraint(equalTo: eClip.topAnchor),
-            effectsStack.leadingAnchor.constraint(equalTo: eClip.leadingAnchor),
-            effectsStack.widthAnchor.constraint(equalTo: eClip.widthAnchor),
-        ])
-
-        // ── Properties: "no tool" placeholder ───────────────────────────────────
-        let placeholder = NSTextField(labelWithString: "Select a tool from the\ntoolbar to see its properties.")
-        placeholder.font = NSFont.systemFont(ofSize: 12)
-        placeholder.textColor = .secondaryLabelColor
-        placeholder.alignment = .center
-        placeholder.lineBreakMode = .byWordWrapping
-        placeholder.maximumNumberOfLines = 0
-        placeholder.translatesAutoresizingMaskIntoConstraints = false
-
-        let ntBox = NSView()
-        ntBox.translatesAutoresizingMaskIntoConstraints = false
-        ntBox.addSubview(placeholder)
-        NSLayoutConstraint.activate([
-            placeholder.topAnchor.constraint(equalTo: ntBox.topAnchor, constant: 24),
-            placeholder.bottomAnchor.constraint(equalTo: ntBox.bottomAnchor, constant: -24),
-            placeholder.leadingAnchor.constraint(equalTo: ntBox.leadingAnchor, constant: 14),
-            placeholder.trailingAnchor.constraint(equalTo: ntBox.trailingAnchor, constant: -14),
-        ])
-        propertiesStack.addArrangedSubview(ntBox)
-        noToolView = ntBox
-
-        // ── Properties: arrow tool section ──────────────────────────────────────
-        let arrowHeader = makeSectionBox("ARROW")
-        arrowHeader.isHidden = true
-        propertiesStack.addArrangedSubview(arrowHeader)
-        arrowPropViews.append(arrowHeader)
-
-        let awRow = makeSidebarRow("Weight", arrowWeightSlider, arrowWeightLabel)
-        awRow.isHidden = true
-        propertiesStack.addArrangedSubview(awRow)
-        arrowPropViews.append(awRow)
-
-        let acRow = makeSidebarRow("Color", arrowColorWell)
-        acRow.isHidden = true
-        propertiesStack.addArrangedSubview(acRow)
-        arrowPropViews.append(acRow)
-
-        // ── Properties: text tool section ───────────────────────────────────────
-        let textHeader = makeSectionBox("TEXT")
-        textHeader.isHidden = true
-        propertiesStack.addArrangedSubview(textHeader)
-        textPropViews.append(textHeader)
-
-        let tfFontRow = makeSidebarRow("Font", textFontPopup)
-        tfFontRow.isHidden = true
-        propertiesStack.addArrangedSubview(tfFontRow)
-        textPropViews.append(tfFontRow)
-
-        let tfSizeRow = makeSidebarRow("Size", textFontSizeSlider, textFontSizeLabel)
-        tfSizeRow.isHidden = true
-        propertiesStack.addArrangedSubview(tfSizeRow)
-        textPropViews.append(tfSizeRow)
-
-        let tfColorRow = makeSidebarRow("Color", textFontColorWell)
-        tfColorRow.isHidden = true
-        propertiesStack.addArrangedSubview(tfColorRow)
-        textPropViews.append(tfColorRow)
-
-        let toColorRow = makeSidebarRow("Outline", textOutlineColorWell)
-        toColorRow.isHidden = true
-        propertiesStack.addArrangedSubview(toColorRow)
-        textPropViews.append(toColorRow)
-
-        let toWtRow = makeSidebarRow("Thickness", textOutlineWeightSlider, textOutlineWeightLabel)
-        toWtRow.isHidden = true
-        propertiesStack.addArrangedSubview(toWtRow)
-        textPropViews.append(toWtRow)
-
-        // ── Properties: shape tool section ──────────────────────────────────────
-        let shapeHeader = makeSectionBox("SHAPE")
-        shapeHeader.isHidden = true
-        propertiesStack.addArrangedSubview(shapeHeader)
-        shapePropViews.append(shapeHeader)
-
-        let shapeTypeRow = makeSidebarRow("Type", shapeTypePopup)
-        shapeTypeRow.isHidden = true
-        propertiesStack.addArrangedSubview(shapeTypeRow)
-        shapePropViews.append(shapeTypeRow)
-
-        let shapeBorderRow = makeSidebarRow("Border", shapeBorderWeightSlider, shapeBorderWeightLabel)
-        shapeBorderRow.isHidden = true
-        propertiesStack.addArrangedSubview(shapeBorderRow)
-        shapePropViews.append(shapeBorderRow)
-
-        let shapeBorderColorRow = makeSidebarRow("Color", shapeBorderColorWell)
-        shapeBorderColorRow.isHidden = true
-        propertiesStack.addArrangedSubview(shapeBorderColorRow)
-        shapePropViews.append(shapeBorderColorRow)
-
-        let shapeFillColorRow = makeSidebarRow("Fill", shapeFillColorWell)
-        shapeFillColorRow.isHidden = true
-        propertiesStack.addArrangedSubview(shapeFillColorRow)
-        shapePropViews.append(shapeFillColorRow)
-
-        // Start showing Properties tab
-        effectsScroll.isHidden = true
-
-        tabControl.target = self
-        tabControl.action = #selector(tabChanged(_:))
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    // MARK: Tab switching
-
-    @objc private func tabChanged(_ sender: NSSegmentedControl) {
-        propertiesScroll.isHidden = sender.selectedSegment != 0
-        effectsScroll.isHidden    = sender.selectedSegment != 1
-    }
-
-    func setToolMode(_ mode: ToolMode) {
-        noToolView.isHidden = mode != .none
-        let isArrow = mode == .arrow
-        let isText  = mode == .text
-        let isShape = mode == .shape
-        arrowPropViews.forEach { $0.isHidden = !isArrow }
-        textPropViews.forEach  { $0.isHidden = !isText }
-        shapePropViews.forEach { $0.isHidden = !isShape }
-        if mode != .none && tabControl.selectedSegment != 0 {
-            tabControl.selectedSegment = 0
-            propertiesScroll.isHidden = false
-            effectsScroll.isHidden = true
-        }
-    }
-
-    // MARK: Effects panel builders
-
-    func addEffectSection(_ title: String, toggle: NSButton? = nil) {
-        if !effectsStack.arrangedSubviews.isEmpty {
-            let divider = NSBox(); divider.boxType = .separator
-            effectsStack.addArrangedSubview(divider)
-        }
-        effectsStack.addArrangedSubview(makeSectionBox(title, toggle: toggle))
-    }
-
-    func addEffectRow(_ labelText: String, _ control: NSView, _ valLabel: NSTextField? = nil) {
-        effectsStack.addArrangedSubview(makeSidebarRow(labelText, control, valLabel))
-    }
-
-    // MARK: Private builders
-
-    private func makeSectionBox(_ title: String, toggle: NSButton? = nil) -> NSView {
-        let lbl = NSTextField(labelWithString: title)
-        lbl.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        lbl.textColor = .secondaryLabelColor
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-
-        let box = NSView()
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(lbl)
-        NSLayoutConstraint.activate([
-            lbl.topAnchor.constraint(equalTo: box.topAnchor, constant: 16),
-            lbl.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -6),
-            lbl.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 14),
-        ])
-        if let toggle = toggle {
-            toggle.translatesAutoresizingMaskIntoConstraints = false
-            box.addSubview(toggle)
-            NSLayoutConstraint.activate([
-                toggle.centerYAnchor.constraint(equalTo: lbl.centerYAnchor),
-                toggle.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -14),
-            ])
-        }
-        return box
-    }
-
-    private func makeSidebarRow(_ labelText: String, _ control: NSView,
-                                _ valLabel: NSTextField? = nil) -> NSView {
-        let lbl = NSTextField(labelWithString: labelText)
-        lbl.font = NSFont.systemFont(ofSize: 12)
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        lbl.widthAnchor.constraint(equalToConstant: 60).isActive = true
-
-        control.translatesAutoresizingMaskIntoConstraints = false
-        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        var views: [NSView] = [lbl, control]
-        if let vl = valLabel {
-            vl.translatesAutoresizingMaskIntoConstraints = false
-            vl.widthAnchor.constraint(equalToConstant: 36).isActive = true
-            vl.setContentHuggingPriority(.required, for: .horizontal)
-            views.append(vl)
-        }
-
-        let row = NSStackView(views: views)
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 0, left: 14, bottom: 0, right: 14)
-        row.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        return row
-    }
-}
-
-// MARK: - ZoomableScrollView
-
-private class ZoomableScrollView: NSScrollView {
-    var onMagnificationChanged: (() -> Void)?
-
-    override func scrollWheel(with event: NSEvent) {
-        guard event.modifierFlags.contains(.command) else {
-            super.scrollWheel(with: event); return
-        }
-        let delta = event.scrollingDeltaY
-        guard delta != 0 else { return }
-        let factor: CGFloat = delta > 0 ? 1.08 : 1 / 1.08
-        let newMag = (magnification * factor).clamped(to: minMagnification...maxMagnification)
-        let center = convert(event.locationInWindow, from: nil)
-        setMagnification(newMag, centeredAt: center)
-        onMagnificationChanged?()
-    }
-}
-
-private extension Comparable {
-    func clamped(to range: ClosedRange<Self>) -> Self {
-        max(range.lowerBound, min(range.upperBound, self))
-    }
-}
-
-// MARK: - FlippedClipView
-
-private class FlippedClipView: NSClipView {
-    override var isFlipped: Bool { true }
-}
-
-// MARK: - Canvas
-
-private class CanvasView: NSView {
-    override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedRed: 0.95, green: 0.95, blue: 0.93, alpha: 1).setFill()
-        dirtyRect.fill()
-    }
-}
-
-// MARK: - Tiny helpers
-
-private func makeToolButton(_ title: String) -> NSButton {
-    let b = NSButton()
-    b.title = title
-    b.setButtonType(.toggle)
-    b.bezelStyle = .rounded
-    b.translatesAutoresizingMaskIntoConstraints = false
-    return b
-}
-
-private func sld(_ min: Double, _ max: Double, _ val: Double) -> NSSlider {
-    let s = NSSlider(value: val, minValue: min, maxValue: max, target: nil, action: nil)
-    s.controlSize = .small; return s
-}
-
-private func well(_ color: NSColor) -> NSColorWell {
-    let w = NSColorWell(); w.color = color; return w
-}
-
-private func vlbl(_ text: String) -> NSTextField {
-    let f = NSTextField(labelWithString: text)
-    f.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-    f.alignment = .right
-    f.translatesAutoresizingMaskIntoConstraints = false
-    f.widthAnchor.constraint(equalToConstant: 36).isActive = true
-    f.setContentHuggingPriority(.required, for: .horizontal)
-    return f
-}
-
-private func fmt(_ v: CGFloat) -> String { "\(Int(v))" }
-private func fmtPct(_ v: CGFloat) -> String { "\(Int(v * 100))%" }
-
-// MARK: - CropOverlayView
-
-class CropOverlayView: NSView {
-
-    // Called with a normalized rect (0-1 in image space, y=0 at bottom) when user confirms.
-    var onCropConfirmed: ((CGRect) -> Void)?
-    var onCropCancelled: (() -> Void)?
-
-    // imageDisplayRectProvider mirrors the one on AnnotationOverlay.
-    var imageDisplayRectProvider: (() -> CGRect)?
-
-    private enum CropDragState { case idle, dragging(start: CGPoint, current: CGPoint), selected(rect: CGRect) }
-    private var dragState: CropDragState = .idle
-
-    override var acceptsFirstResponder: Bool { true }
-    override var isFlipped: Bool { false }
-
-    // MARK: - Public
-
-    func reset() {
-        dragState = .idle
-        needsDisplay = true
-    }
-
-    // MARK: - Drawing
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-
-        // Only operate within the actual rendered image rect, not the full padded view.
-        let imgRect = imageDisplayRect
-
-        // Dim only the image area.
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
-        ctx.fill(imgRect)
-
-        let selRect: CGRect?
-        switch dragState {
-        case .dragging(let s, let c):
-            selRect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y)).standardized
-        case .selected(let r):
-            selRect = r
-        case .idle:
-            selRect = nil
-        }
-
-        if let r = selRect {
-            // Clear the selected area (restores the image underneath).
-            ctx.clear(r)
-
-            // Draw a bright border around the selection.
-            let borderPath = NSBezierPath(rect: r)
-            borderPath.lineWidth = 1.5
-            NSColor.white.setStroke()
-            borderPath.stroke()
-
-            // Draw rule-of-thirds grid inside selection.
-            NSColor.white.withAlphaComponent(0.3).setStroke()
-            let thirdW = r.width / 3
-            let thirdH = r.height / 3
-            for i in 1...2 {
-                let vLine = NSBezierPath()
-                vLine.move(to: CGPoint(x: r.minX + thirdW * CGFloat(i), y: r.minY))
-                vLine.line(to: CGPoint(x: r.minX + thirdW * CGFloat(i), y: r.maxY))
-                vLine.lineWidth = 0.5
-                vLine.stroke()
-                let hLine = NSBezierPath()
-                hLine.move(to: CGPoint(x: r.minX, y: r.minY + thirdH * CGFloat(i)))
-                hLine.line(to: CGPoint(x: r.maxX, y: r.minY + thirdH * CGFloat(i)))
-                hLine.lineWidth = 0.5
-                hLine.stroke()
-            }
-
-            // Corner handles.
-            let corners: [CGPoint] = [
-                CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
-                CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY),
-            ]
-            let handleLen: CGFloat = 12
-            let handleW: CGFloat = 2.5
-            NSColor.white.setStroke()
-            for corner in corners {
-                let hx = NSBezierPath()
-                let dirX: CGFloat = corner.x == r.minX ? 1 : -1
-                let dirY: CGFloat = corner.y == r.minY ? 1 : -1
-                hx.move(to: corner)
-                hx.line(to: CGPoint(x: corner.x + dirX * handleLen, y: corner.y))
-                hx.lineWidth = handleW; hx.stroke()
-                let hy = NSBezierPath()
-                hy.move(to: corner)
-                hy.line(to: CGPoint(x: corner.x, y: corner.y + dirY * handleLen))
-                hy.lineWidth = handleW; hy.stroke()
-            }
-
-            // "Crop" / "Cancel" hint labels when selection is complete.
-            if case .selected = dragState {
-                let attrs: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-                    .foregroundColor: NSColor.white,
-                ]
-                let confirmStr = NSAttributedString(string: "↵ Crop   Esc Cancel", attributes: attrs)
-                let sz = confirmStr.size()
-                let labelPt = CGPoint(x: r.midX - sz.width / 2,
-                                      y: r.minY - sz.height - 8)
-                if labelPt.y > imgRect.minY + 4 {
-                    confirmStr.draw(at: labelPt)
-                } else {
-                    confirmStr.draw(at: CGPoint(x: r.midX - sz.width / 2, y: r.maxY + 8))
-                }
-            }
-        }
-    }
-
-    // MARK: - Cursor
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
-    }
-
-    // MARK: - Mouse
-
-    override func mouseDown(with event: NSEvent) {
-        let raw = convert(event.locationInWindow, from: nil)
-        let loc = raw.clamped(to: imageDisplayRect)
-        dragState = .dragging(start: loc, current: loc)
-        needsDisplay = true
-        window?.makeFirstResponder(self)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let raw = convert(event.locationInWindow, from: nil)
-        let loc = raw.clamped(to: imageDisplayRect)
-        if case .dragging(let s, _) = dragState {
-            dragState = .dragging(start: s, current: loc)
-            needsDisplay = true
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let raw = convert(event.locationInWindow, from: nil)
-        let loc = raw.clamped(to: imageDisplayRect)
-        if case .dragging(let s, _) = dragState {
-            let r = CGRect(origin: s, size: CGSize(width: loc.x - s.x, height: loc.y - s.y)).standardized
-            if r.width > 8 && r.height > 8 {
-                dragState = .selected(rect: r)
-            } else {
-                dragState = .idle
-            }
-            needsDisplay = true
-        }
-    }
-
-    // MARK: - Keyboard
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 36, 76: // Return / Enter
-            confirmCrop()
-        case 53: // Escape
-            onCropCancelled?()
-        default:
-            super.keyDown(with: event)
-        }
-    }
-
-    private func confirmCrop() {
-        guard case .selected(let viewRect) = dragState else { return }
-        // Convert view rect to normalized image coordinates.
-        let imgRect = imageDisplayRect
-        guard imgRect.width > 0, imgRect.height > 0 else { return }
-
-        // Clamp to image bounds.
-        let clamped = viewRect.intersection(imgRect)
-        guard clamped.width > 4, clamped.height > 4 else { return }
-
-        // Normalize relative to image display rect. y=0 at bottom.
-        let normX = (clamped.minX - imgRect.minX) / imgRect.width
-        let normY = (clamped.minY - imgRect.minY) / imgRect.height
-        let normW = clamped.width  / imgRect.width
-        let normH = clamped.height / imgRect.height
-
-        onCropConfirmed?(CGRect(x: normX, y: normY, width: normW, height: normH))
-    }
-
-    private var imageDisplayRect: CGRect {
-        imageDisplayRectProvider?() ?? bounds
-    }
-}
-
-// MARK: - CGPoint clamp helper
-
-private extension CGPoint {
-    func clamped(to rect: CGRect) -> CGPoint {
-        CGPoint(
-            x: max(rect.minX, min(rect.maxX, x)),
-            y: max(rect.minY, min(rect.maxY, y))
-        )
     }
 }
