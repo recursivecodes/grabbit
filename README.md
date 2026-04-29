@@ -1,8 +1,10 @@
 # Grabbit
 
-![grabbit](grabbit.png)
+![grabbit](grabbit.png) A lightweight macOS screenshot and annotation tool that lives in your menu bar. Trigger a capture with a global hotkey, draw a selection, then annotate and export — all without touching the Dock. |
 
-A lightweight macOS screenshot and annotation tool that lives in your menu bar. Trigger a capture with a global hotkey, draw a selection, then annotate and export — all without touching the Dock.
+
+
+
 
 ![macOS](https://img.shields.io/badge/macOS-13%2B-blue) ![Swift](https://img.shields.io/badge/Swift-5.9-orange)
 
