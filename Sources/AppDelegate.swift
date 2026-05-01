@@ -21,7 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         // App menu
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        // Cmd+Q closes the front editor window but keeps Grabbit running in
+        // the menu bar. To fully quit, use "Quit Grabbit" in the status bar menu.
+        appMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
@@ -89,6 +91,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
 
     @objc private func openSettings() {
         SettingsWindowController.show(currentConfig: hotkeyManager.config, delegate: self)
+    }
+
+    // MARK: - NSApplicationDelegate
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Keep running as a menu bar app after the editor window is closed.
+        return false
     }
 
     // MARK: - SettingsWindowControllerDelegate
