@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Tool
 
-enum AnnotationTool { case none, arrow, text, shape }
+enum AnnotationTool { case none, arrow, text, shape, blur }
 
 // MARK: - ShapeType
 
@@ -22,6 +22,18 @@ struct Shape {
     var borderWeight: CGFloat
     var borderColor: NSColor
     var fillColor: NSColor
+}
+
+// MARK: - BlurRegion
+
+enum BlurStyle { case blur, pixelate }
+
+struct BlurRegion {
+    var id = UUID()
+    var zOrder: Int = 0
+    var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
+    var intensity: CGFloat // 0-100
+    var style: BlurStyle
 }
 
 // MARK: - Arrow
@@ -91,6 +103,11 @@ class AnnotationOverlay: NSView {
     var currentBorderColor:   NSColor = .black
     var currentFillColor:     NSColor = .clear
 
+    // MARK: Blur state
+    var blurRegions: [BlurRegion] = []
+    var currentBlurIntensity: CGFloat = 80
+    var currentBlurStyle: BlurStyle = .blur
+
     // MARK: Z-order counter — incremented each time a new annotation is added.
     private var zOrderCounter: Int = 0
     private func nextZOrder() -> Int { zOrderCounter += 1; return zOrderCounter }
@@ -102,6 +119,7 @@ class AnnotationOverlay: NSView {
             if activeTool != .arrow { selectedArrowID = nil }
             if activeTool != .text  { finalizeEditing(); selectedTextID = nil }
             if activeTool != .shape { finalizeShape(); selectedShapeID = nil }
+            if activeTool != .blur  { selectedBlurID = nil }
             needsDisplay = true
         }
     }
@@ -120,6 +138,8 @@ class AnnotationOverlay: NSView {
     // Called when a click in .none mode hits an annotation — activates the
     // matching tool and selects the item so the sidebar shows its properties.
     var onActivateTool: ((AnnotationTool) -> Void)?
+    // Provides the current source image for live blur preview.
+    var imageProvider: (() -> NSImage?)?
 
     // MARK: Private state
     private var selectedArrowID: UUID?
@@ -130,6 +150,7 @@ class AnnotationOverlay: NSView {
         }
     }
     private var selectedShapeID: UUID?
+    private var selectedBlurID:  UUID?
 
     private enum DragState {
         case none
@@ -140,6 +161,9 @@ class AnnotationOverlay: NSView {
         case newShape(start: CGPoint, current: CGPoint)
         case movingShapeWhole(index: Int, lastLoc: CGPoint)
         case resizingShape(index: Int, start: CGPoint, originalRect: CGRect)
+        case newBlur(start: CGPoint, current: CGPoint)
+        case movingBlurWhole(index: Int, lastLoc: CGPoint)
+        case resizingBlur(index: Int, start: CGPoint, originalRect: CGRect)
     }
     private var dragState: DragState = .none
 
@@ -189,6 +213,12 @@ class AnnotationOverlay: NSView {
                 }
             })
         }
+        for region in blurRegions {
+            let r = region
+            items.append(DrawItem(zOrder: r.zOrder) {
+                self.drawBlurRegion(r, selected: self.selectedBlurID == r.id)
+            })
+        }
 
         items.sorted { $0.zOrder < $1.zOrder }.forEach { $0.draw() }
 
@@ -202,6 +232,11 @@ class AnnotationOverlay: NSView {
             drawShapeRect(rect, shapeType: currentShapeType,
                          borderWeight: currentBorderWeight, borderColor: currentBorderColor,
                          fillColor: currentFillColor, selected: false)
+        }
+        if case .newBlur(let s, let c) = dragState {
+            var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
+            rect = rect.standardized
+            drawBlurRegionBorder(rect, selected: false)
         }
     }
 
@@ -334,6 +369,84 @@ class AnnotationOverlay: NSView {
         NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
     }
 
+    private func drawBlurRegion(_ region: BlurRegion, selected: Bool) {
+        let viewOrigin = toView(region.rect.origin)
+        let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
+                              height: region.rect.height * imageDisplayRect.height)
+        let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
+
+        if let image = imageProvider?(),
+           let baseCG = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+
+            // Use actual CGImage pixel dimensions — may differ from image.size (points)
+            // on Retina displays where the CGImage is 2x.
+            let cgW = CGFloat(baseCG.width)
+            let cgH = CGFloat(baseCG.height)
+
+            // Pixel rect in CGImage space (y=0 at bottom).
+            let pixelRect = CGRect(
+                x: region.rect.origin.x * cgW,
+                y: region.rect.origin.y * cgH,
+                width:  region.rect.width  * cgW,
+                height: region.rect.height * cgH
+            ).standardized
+
+            if pixelRect.width > 1, pixelRect.height > 1,
+               let offCtx = CGContext(
+                   data: nil,
+                   width: Int(cgW), height: Int(cgH),
+                   bitsPerComponent: 8, bytesPerRow: 0,
+                   space: CGColorSpaceCreateDeviceRGB(),
+                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+
+                offCtx.draw(baseCG, in: CGRect(x: 0, y: 0, width: cgW, height: cgH))
+
+                let ciImage = CIImage(cgImage: baseCG)
+                let ciCtx   = CIContext(cgContext: offCtx, options: nil)
+                if let filtered = blurFilter(ciImage: ciImage, pixelRect: pixelRect,
+                                             style: region.style,
+                                             intensity: region.intensity,
+                                             imageSize: CGSize(width: cgW, height: cgH)) {
+                    ciCtx.draw(filtered, in: pixelRect, from: pixelRect)
+                }
+
+                if let resultCG = offCtx.makeImage() {
+                    // NSImage backed by CGImage uses y=0 at bottom for `from:`,
+                    // matching CGImage/CI pixel space — no flip needed.
+                    let resultNS = NSImage(cgImage: resultCG,
+                                          size: NSSize(width: cgW, height: cgH))
+                    resultNS.draw(in: viewRect, from: pixelRect,
+                                  operation: .sourceOver, fraction: 1.0)
+
+                    drawBlurRegionBorder(viewRect, selected: selected)
+                    if selected {
+                        let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
+                        drawShapeResizeHandleBottomRight(at: br)
+                    }
+                    return
+                }
+            }
+        }
+
+        drawBlurRegionBorder(viewRect, selected: selected)
+        if selected {
+            let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
+            drawShapeResizeHandleBottomRight(at: br)
+        }
+    }
+
+    private func drawBlurRegionBorder(_ rect: CGRect, selected: Bool) {
+        let path = NSBezierPath(rect: rect)
+        path.lineWidth = selected ? 2 : 1.5
+        if selected {
+            NSColor.selectedControlColor.setStroke()
+        } else {
+            NSColor.white.withAlphaComponent(0.6).setStroke()
+        }
+        path.setLineDash([6, 3], count: 2, phase: 0)
+        path.stroke()
+    }
+
     // MARK: - Cursor
 
     override func resetCursorRects() {
@@ -342,6 +455,7 @@ class AnnotationOverlay: NSView {
         case .arrow: cursor = .crosshair
         case .text:  cursor = .iBeam
         case .shape: cursor = .crosshair
+        case .blur:  cursor = .crosshair
         case .none:  cursor = .arrow
         }
         addCursorRect(bounds, cursor: cursor)
@@ -355,6 +469,7 @@ class AnnotationOverlay: NSView {
         if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) { return (.arrow, idx) }
         if let idx = textIndex(near: loc)  { return (.text,  idx) }
         if let idx = shapeIndex(near: loc) { return (.shape, idx) }
+        if let idx = blurIndex(near: loc)  { return (.blur,  idx) }
         return nil
     }
 
@@ -365,6 +480,7 @@ class AnnotationOverlay: NSView {
         case .arrow: selectedArrowID = arrows[idx].id
         case .text:  selectedTextID  = textAnnotations[idx].id
         case .shape: selectedShapeID = shapes[idx].id
+        case .blur:  selectedBlurID  = blurRegions[idx].id
         case .none:  break
         }
         if tool != activeTool {
@@ -458,6 +574,35 @@ class AnnotationOverlay: NSView {
                 needsDisplay = true
             }
 
+        case .blur:
+            // Check resize handle of selected blur region first.
+            if let selID = selectedBlurID,
+               let selIdx = blurRegions.firstIndex(where: { $0.id == selID }) {
+                let region = blurRegions[selIdx]
+                let viewOrigin = toView(region.rect.origin)
+                let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
+                                     height: region.rect.height * imageDisplayRect.height)
+                let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
+                let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
+                let handleRect = CGRect(x: br.x - 7, y: br.y - 7, width: 14, height: 14)
+                if handleRect.contains(loc) {
+                    dragState = .resizingBlur(index: selIdx, start: loc, originalRect: region.rect)
+                    needsDisplay = true
+                    break
+                }
+            }
+            if let idx = blurIndex(near: loc) {
+                selectedBlurID = blurRegions[idx].id
+                dragState = .movingBlurWhole(index: idx, lastLoc: loc)
+                needsDisplay = true
+            } else if let (tool, idx) = hitTestAny(at: loc), tool != .blur {
+                selectAnnotation(tool: tool, index: idx)
+            } else {
+                dragState = .newBlur(start: loc, current: loc)
+                selectedBlurID = nil
+                needsDisplay = true
+            }
+
         case .none:
             // No tool active — clicking any annotation activates its tool.
             if let (tool, idx) = hitTestAny(at: loc) {
@@ -508,6 +653,28 @@ class AnnotationOverlay: NSView {
             if newRect.size.height < 0.02 { newRect.size.height = 0.02 }
             shapes[idx].rect = newRect
             needsDisplay = true
+        case .movingBlurWhole(let idx, let last):
+            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
+            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
+            blurRegions[idx].rect.origin.x += d.x
+            blurRegions[idx].rect.origin.y += d.y
+            dragState = .movingBlurWhole(index: idx, lastLoc: loc); needsDisplay = true
+        case .newBlur(let s, _):
+            dragState = .newBlur(start: s, current: loc); needsDisplay = true
+        case .resizingBlur(let idx, _, let origRect):
+            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
+            let origViewRect = CGRect(
+                origin: toView(origRect.origin),
+                size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
+            ).standardized
+            let origBR = CGPoint(x: origViewRect.maxX, y: origViewRect.minY)
+            let dx = (loc.x - origBR.x) / r.width
+            let dy = (loc.y - origBR.y) / r.height
+            var newRect = origRect
+            newRect.size.width  = max(0.02, origRect.width  + dx)
+            newRect.size.height = max(0.02, origRect.height - dy)
+            blurRegions[idx].rect = newRect
+            needsDisplay = true
         case .none: break
         }
     }
@@ -543,7 +710,26 @@ class AnnotationOverlay: NSView {
             } else {
                 selectedShapeID = nil
             }
-        case .movingArrowTail, .movingArrowWhole, .movingText, .movingShapeWhole, .resizingShape:
+        case .newBlur(let s, let c):
+            let size = CGSize(width: c.x - s.x, height: c.y - s.y)
+            if abs(size.width) > 8 || abs(size.height) > 8 {
+                var rect = CGRect(origin: s, size: size)
+                rect = rect.standardized
+                let normOrigin = toNorm(rect.origin)
+                let normRect = CGRect(x: normOrigin.x,
+                                     y: normOrigin.y,
+                                     width: rect.size.width / imageDisplayRect.width,
+                                     height: rect.size.height / imageDisplayRect.height)
+                var region = BlurRegion(rect: normRect,
+                                        intensity: currentBlurIntensity,
+                                        style: currentBlurStyle)
+                region.zOrder = nextZOrder()
+                blurRegions.append(region); selectedBlurID = region.id; onChange?()
+            } else {
+                selectedBlurID = nil
+            }
+        case .movingArrowTail, .movingArrowWhole, .movingText, .movingShapeWhole, .resizingShape,
+             .movingBlurWhole, .resizingBlur:
             onChange?()
         case .none: break
         }
@@ -673,6 +859,10 @@ class AnnotationOverlay: NSView {
             shapes.removeAll { $0.id == id }
             selectedShapeID = nil
             needsDisplay = true; onChange?()
+        } else if activeTool == .blur, let id = selectedBlurID {
+            blurRegions.removeAll { $0.id == id }
+            selectedBlurID = nil
+            needsDisplay = true; onChange?()
         } else {
             super.keyDown(with: event)
         }
@@ -689,6 +879,7 @@ class AnnotationOverlay: NSView {
             case arrow(UUID)
             case text(UUID)
             case shape(UUID)
+            case blur(UUID)
         }
         var hit: HitItem?
         if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) {
@@ -697,6 +888,8 @@ class AnnotationOverlay: NSView {
             hit = .text(textAnnotations[idx].id)
         } else if let idx = shapeIndex(near: loc) {
             hit = .shape(shapes[idx].id)
+        } else if let idx = blurIndex(near: loc) {
+            hit = .blur(blurRegions[idx].id)
         }
 
         if let hit {
@@ -706,6 +899,7 @@ class AnnotationOverlay: NSView {
             case .arrow(let u):  id = u; deleteTitle = "Delete Arrow"
             case .text(let u):   id = u; deleteTitle = "Delete Text"
             case .shape(let u):  id = u; deleteTitle = "Delete Shape"
+            case .blur(let u):   id = u; deleteTitle = "Delete Blur"
             }
 
             // Layering submenu
@@ -741,6 +935,7 @@ class AnnotationOverlay: NSView {
         if let a = arrows.first(where: { $0.id == id })            { return a.zOrder }
         if let t = textAnnotations.first(where: { $0.id == id })   { return t.zOrder }
         if let s = shapes.first(where: { $0.id == id })            { return s.zOrder }
+        if let b = blurRegions.first(where: { $0.id == id })       { return b.zOrder }
         return nil
     }
 
@@ -748,6 +943,7 @@ class AnnotationOverlay: NSView {
         if let i = arrows.firstIndex(where: { $0.id == id })          { arrows[i].zOrder = z }
         if let i = textAnnotations.firstIndex(where: { $0.id == id }) { textAnnotations[i].zOrder = z }
         if let i = shapes.firstIndex(where: { $0.id == id })          { shapes[i].zOrder = z }
+        if let i = blurRegions.firstIndex(where: { $0.id == id })     { blurRegions[i].zOrder = z }
     }
 
     private func allZOrders() -> [(id: UUID, z: Int)] {
@@ -755,6 +951,7 @@ class AnnotationOverlay: NSView {
         arrows.forEach          { all.append(($0.id, $0.zOrder)) }
         textAnnotations.forEach { all.append(($0.id, $0.zOrder)) }
         shapes.forEach          { all.append(($0.id, $0.zOrder)) }
+        blurRegions.forEach     { all.append(($0.id, $0.zOrder)) }
         return all.sorted { $0.1 < $1.1 }
     }
 
@@ -812,9 +1009,11 @@ class AnnotationOverlay: NSView {
         arrows.removeAll          { $0.id == id }
         textAnnotations.removeAll { $0.id == id }
         shapes.removeAll          { $0.id == id }
+        blurRegions.removeAll     { $0.id == id }
         if selectedArrowID == id { selectedArrowID = nil }
         if selectedTextID  == id { selectedTextID  = nil }
         if selectedShapeID == id { selectedShapeID = nil }
+        if selectedBlurID  == id { selectedBlurID  = nil }
         needsDisplay = true; onChange?()
     }
 
@@ -875,6 +1074,16 @@ class AnnotationOverlay: NSView {
         needsDisplay = true
     }
 
+    // MARK: - Update selected blur
+
+    func updateSelectedBlur(intensity: CGFloat? = nil, style: BlurStyle? = nil) {
+        guard let id = selectedBlurID,
+              let idx = blurRegions.firstIndex(where: { $0.id == id }) else { return }
+        if let v = intensity { blurRegions[idx].intensity = v }
+        if let v = style     { blurRegions[idx].style     = v }
+        needsDisplay = true; onChange?()
+    }
+
     // MARK: - Coordinate helpers
 
     func toNorm(_ p: CGPoint) -> CGPoint {
@@ -933,6 +1142,18 @@ class AnnotationOverlay: NSView {
                 return CGRect(origin: viewRect, size: viewSize).contains(point)
             }
             .max(by: { shapes[$0].zOrder < shapes[$1].zOrder })
+    }
+
+    private func blurIndex(near point: CGPoint) -> Int? {
+        blurRegions.indices
+            .filter { i in
+                let region = blurRegions[i]
+                let viewOrigin = toView(region.rect.origin)
+                let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
+                                     height: region.rect.height * imageDisplayRect.height)
+                return CGRect(origin: viewOrigin, size: viewSize).standardized.contains(point)
+            }
+            .max(by: { blurRegions[$0].zOrder < blurRegions[$1].zOrder })
     }
 
     private func distToSeg(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {

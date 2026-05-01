@@ -12,6 +12,7 @@ class TabbedEditorSidebar: NSView {
     private var arrowPropViews:   [NSView] = []
     private var textPropViews:    [NSView] = []
     private var shapePropViews:   [NSView] = []
+    private var blurPropViews:    [NSView] = []
 
     init(
         arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
@@ -23,7 +24,9 @@ class TabbedEditorSidebar: NSView {
         shapeTypePopup: NSPopUpButton,
         shapeBorderWeightSlider: NSSlider, shapeBorderWeightLabel: NSTextField,
         shapeBorderColorWell: NSColorWell,
-        shapeFillColorWell: NSColorWell
+        shapeFillColorWell: NSColorWell,
+        blurIntensitySlider: NSSlider, blurIntensityLabel: NSTextField,
+        blurStylePopup: NSPopUpButton
     ) {
         tabControl = NSSegmentedControl(
             labels: ["Properties", "Effects"],
@@ -214,6 +217,22 @@ class TabbedEditorSidebar: NSView {
         propertiesStack.addArrangedSubview(shapeFillColorRow)
         shapePropViews.append(shapeFillColorRow)
 
+        // ── Properties: blur tool section ────────────────────────────────────────
+        let blurHeader = makeSectionBox("BLUR")
+        blurHeader.isHidden = true
+        propertiesStack.addArrangedSubview(blurHeader)
+        blurPropViews.append(blurHeader)
+
+        let blurStyleRow = makeSidebarRow("Style", blurStylePopup)
+        blurStyleRow.isHidden = true
+        propertiesStack.addArrangedSubview(blurStyleRow)
+        blurPropViews.append(blurStyleRow)
+
+        let blurIntensityRow = makeSidebarRow("Intensity", blurIntensitySlider, blurIntensityLabel)
+        blurIntensityRow.isHidden = true
+        propertiesStack.addArrangedSubview(blurIntensityRow)
+        blurPropViews.append(blurIntensityRow)
+
         // Start showing Properties tab
         effectsScroll.isHidden = true
 
@@ -250,9 +269,11 @@ class TabbedEditorSidebar: NSView {
         let isArrow = mode == .arrow
         let isText  = mode == .text
         let isShape = mode == .shape
+        let isBlur  = mode == .blur
         arrowPropViews.forEach { $0.isHidden = !isArrow }
         textPropViews.forEach  { $0.isHidden = !isText }
         shapePropViews.forEach { $0.isHidden = !isShape }
+        blurPropViews.forEach  { $0.isHidden = !isBlur }
         if mode != .none && tabControl.selectedSegment != 0 {
             tabControl.selectedSegment = 0
             propertiesScroll.isHidden = false

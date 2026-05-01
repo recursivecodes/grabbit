@@ -1,4 +1,53 @@
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
+
+// MARK: - Shared blur filter (used by both export rendering and live overlay preview)
+
+func blurFilter(ciImage: CIImage, pixelRect: CGRect,
+                style: BlurStyle, intensity: CGFloat,
+                imageSize: CGSize) -> CIImage? {
+    let t = max(0.01, intensity / 100.0)
+
+    switch style {
+    case .blur:
+        // Key insight: blur the FULL image (clamped to avoid transparent edges),
+        // then crop — this gives clean, fully-opaque edges with no halo artifacts.
+        // Radius scales with the region's shorter side so content is always
+        // fully obliterated at high intensity regardless of region size.
+        // At t=0.01 (intensity=1) the radius is ~0.45% of shortSide — nearly readable.
+        // At t=1.0 (intensity=100) the radius is 45% of shortSide — fully obliterated.
+        let shortSide = min(pixelRect.width, pixelRect.height)
+        let radius = t * shortSide * 0.45
+
+        // CIAffineClamp extends edge pixels infinitely so the blur has real
+        // source data at every sample point — no transparent bleed-in.
+        guard let clampFilter = CIFilter(name: "CIAffineClamp") else { return nil }
+        clampFilter.setValue(ciImage, forKey: kCIInputImageKey)
+        clampFilter.setValue(CGAffineTransform.identity, forKey: "inputTransform")
+        guard let clamped = clampFilter.outputImage else { return nil }
+
+        guard let blurFilter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        blurFilter.setValue(clamped, forKey: kCIInputImageKey)
+        blurFilter.setValue(radius,  forKey: kCIInputRadiusKey)
+        // Crop to the region after blurring — edges are now clean and opaque.
+        return blurFilter.outputImage?.cropped(to: pixelRect)
+
+    case .pixelate:
+        // Pixellate the full image then crop — same clamp-free approach works
+        // here since CIPixellate doesn't sample outside its input.
+        // Block size: at t=1.0 each block is ~1/10 of the shorter dimension.
+        let shortSide = min(pixelRect.width, pixelRect.height)
+        let pixelSize = max(1.0, t * shortSide * 0.1)
+        guard let filter = CIFilter(name: "CIPixellate") else { return nil }
+        filter.setValue(ciImage.cropped(to: pixelRect), forKey: kCIInputImageKey)
+        filter.setValue(pixelSize, forKey: kCIInputScaleKey)
+        // Align the pixel grid to the region origin so blocks don't look offset.
+        filter.setValue(CIVector(cgPoint: CGPoint(x: pixelRect.minX, y: pixelRect.minY)),
+                        forKey: kCIInputCenterKey)
+        return filter.outputImage?.cropped(to: pixelRect)
+    }
+}
 
 extension EditorWindowController {
 
@@ -6,6 +55,7 @@ extension EditorWindowController {
 
     func rendered() -> NSImage {
         var img = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
+        img = withBlurRegions(img)
         img = withArrows(img)
         img = withTexts(img)
         img = withShapes(img)
@@ -117,5 +167,59 @@ extension EditorWindowController {
         base.draw(in: NSRect(x: pad, y: pad, width: base.size.width, height: base.size.height))
         out.unlockFocus()
         return out
+    }
+
+    // MARK: - Blur regions
+
+    func withBlurRegions(_ base: NSImage) -> NSImage {
+        let regions = annotationOverlay.blurRegions
+        guard !regions.isEmpty else { return base }
+
+        guard let baseCG = base.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return base }
+
+        // Use actual CGImage pixel dimensions — on Retina these differ from base.size (points).
+        let w = CGFloat(baseCG.width), h = CGFloat(baseCG.height)
+
+        guard let ctx = CGContext(
+            data: nil,
+            width: Int(w), height: Int(h),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return base }
+
+        ctx.draw(baseCG, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        let ciContext = CIContext(cgContext: ctx, options: nil)
+        let ciBase = CIImage(cgImage: baseCG)
+
+        for region in regions.sorted(by: { $0.zOrder < $1.zOrder }) {
+            let pixelRect = CGRect(
+                x: region.rect.origin.x * w,
+                y: region.rect.origin.y * h,
+                width:  region.rect.width  * w,
+                height: region.rect.height * h
+            ).standardized
+            guard pixelRect.width > 1, pixelRect.height > 1 else { continue }
+
+            let filtered = applyBlurFilter(to: ciBase, in: pixelRect,
+                                           style: region.style, intensity: region.intensity,
+                                           imageSize: CGSize(width: w, height: h))
+            guard let filteredCI = filtered else { continue }
+            ciContext.draw(filteredCI, in: pixelRect, from: pixelRect)
+        }
+
+        guard let resultCG = ctx.makeImage() else { return base }
+        // Return at the original point size so downstream rendering stays consistent.
+        return NSImage(cgImage: resultCG, size: base.size)
+    }
+
+    /// Shared blur/pixelate filter logic used by both export rendering and live preview.
+    func applyBlurFilter(to ciImage: CIImage, in pixelRect: CGRect,
+                         style: BlurStyle, intensity: CGFloat,
+                         imageSize: CGSize) -> CIImage? {
+        return blurFilter(ciImage: ciImage, pixelRect: pixelRect,
+                          style: style, intensity: intensity, imageSize: imageSize)
     }
 }

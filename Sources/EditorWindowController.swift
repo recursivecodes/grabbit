@@ -47,6 +47,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var arrowToolButton: NSButton!
     private var textToolButton:  NSButton!
     private var shapeToolButton: NSButton!
+    private var blurToolButton:  NSButton!
     private var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
     private var cropToolButton:  NSButton!
@@ -73,6 +74,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var shapeBorderWeightSlider: NSSlider!;   private var shapeBorderWeightLabel: NSTextField!
     private var shapeBorderColorWell:    NSColorWell!
     private var shapeFillColorWell:      NSColorWell!
+    private var blurIntensitySlider:     NSSlider!;   private var blurIntensityLabel: NSTextField!
+    private var blurStylePopup:          NSPopUpButton!
 
     // MARK: - Show
 
@@ -228,9 +231,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let textBtn  = makeToolButton("Text")
         let shapeBtn = makeToolButton("Shape")
         let cropBtn  = makeToolButton("Crop")
+        let blurBtn  = makeToolButton("Blur")
         cropBtn.toolTip = "Crop image"
+        blurBtn.toolTip = "Blur / pixelate a region"
 
-        let toolsStack = NSStackView(views: [cropBtn, arrowBtn, textBtn, shapeBtn])
+        let toolsStack = NSStackView(views: [cropBtn, arrowBtn, textBtn, shapeBtn, blurBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -359,6 +364,15 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let shapeBorderWell   = well(shapeBorderColor)
         let shapeFillWell     = well(shapeFillColor)
 
+        // Blur property controls
+        let blurIntensitySliderLocal = sld(1, 100, 80); let blurIntensityLabelLocal = vlbl("80")
+        let blurStylePopupLocal = NSPopUpButton(frame: .zero, pullsDown: false)
+        blurStylePopupLocal.controlSize = .small
+        blurStylePopupLocal.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        blurStylePopupLocal.addItem(withTitle: "Blur")
+        blurStylePopupLocal.addItem(withTitle: "Pixelate")
+        blurStylePopupLocal.selectItem(at: 0)
+
         let sb = TabbedEditorSidebar(
             arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell,
             textFontPopup: tfPopup,
@@ -369,7 +383,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             shapeTypePopup: shapeTypePopupLocal,
             shapeBorderWeightSlider: shapeBorderSlider, shapeBorderWeightLabel: shapeBorderLabel,
             shapeBorderColorWell: shapeBorderWell,
-            shapeFillColorWell: shapeFillWell
+            shapeFillColorWell: shapeFillWell,
+            blurIntensitySlider: blurIntensitySliderLocal, blurIntensityLabel: blurIntensityLabelLocal,
+            blurStylePopup: blurStylePopupLocal
         )
         sb.translatesAutoresizingMaskIntoConstraints = false
         sb.addEffectSection("BORDER", toggle: bToggle)
@@ -400,6 +416,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         // ── IUO assignments ──────────────────────────────────────────────────────
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
         arrowToolButton = arrowBtn;  textToolButton = textBtn;  shapeToolButton = shapeBtn
+        blurToolButton = blurBtn
         zoomScroll = zs;  zoomLabel = zl
         cropToolButton = cropBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
@@ -417,6 +434,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         shapeTypePopup = shapeTypePopupLocal; shapeBorderWeightSlider = shapeBorderSlider
         shapeBorderWeightLabel = shapeBorderLabel; shapeBorderColorWell = shapeBorderWell
         shapeFillColorWell = shapeFillWell
+        blurIntensitySlider = blurIntensitySliderLocal; blurIntensityLabel = blurIntensityLabelLocal
+        blurStylePopup = blurStylePopupLocal
 
         super.init(window: win)
         win.delegate = self
@@ -426,6 +445,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         textBtn.target              = self; textBtn.action              = #selector(toggleTextTool(_:))
         shapeBtn.target             = self; shapeBtn.action             = #selector(toggleShapeTool(_:))
         cropBtn.target              = self; cropBtn.action              = #selector(toggleCropTool(_:))
+        blurBtn.target              = self; blurBtn.action              = #selector(toggleBlurTool(_:))
         zoomInBtn.target            = self; zoomInBtn.action            = #selector(zoomIn)
         zoomOutBtn.target           = self; zoomOutBtn.action           = #selector(zoomOut)
         borderToggle.target         = self; borderToggle.action         = #selector(borderToggleChanged(_:))
@@ -448,6 +468,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         shapeBorderColorWell.action = #selector(colorPanelChanged)
         shapeFillColorWell.target = self
         shapeFillColorWell.action = #selector(colorPanelChanged)
+        blurIntensitySlider.target = self
+        blurIntensitySlider.action = #selector(blurIntensityChanged(_:))
+        blurStylePopup.target = self
+        blurStylePopup.action = #selector(blurStyleChanged(_:))
 
         (zoomScroll as? ZoomableScrollView)?.onMagnificationChanged = { [weak self] in
             self?.updateZoomLabel()
@@ -477,6 +501,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
             return Self.imageDisplayRect(for: img, in: iv)
         }
+        annotationOverlay.imageProvider = { [weak self] in
+            self?.currentImage
+        }
         co.imageDisplayRectProvider = { [weak self] in
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
             return Self.imageDisplayRect(for: img, in: iv)
@@ -489,6 +516,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             self.arrowToolButton.state = .off
             self.textToolButton.state  = .off
             self.shapeToolButton.state = .off
+            self.blurToolButton.state  = .off
             switch tool {
             case .arrow:
                 self.arrowToolButton.state = .on
@@ -502,6 +530,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
                 self.shapeToolButton.state = .on
                 self.toolMode = .shape
                 self.annotationOverlay.activeTool = .shape
+            case .blur:
+                self.blurToolButton.state = .on
+                self.toolMode = .blur
+                self.annotationOverlay.activeTool = .blur
             case .none:
                 break
             }
@@ -606,6 +638,21 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             arrowToolButton.state = .off
             textToolButton.state = .off
             annotationOverlay.activeTool = .shape
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            toolMode = .none
+            annotationOverlay.activeTool = .none
+        }
+        sidebar.setToolMode(toolMode)
+    }
+
+    @objc private func toggleBlurTool(_ sender: NSButton) {
+        if sender.state == .on {
+            toolMode = .blur
+            arrowToolButton.state  = .off
+            textToolButton.state   = .off
+            shapeToolButton.state  = .off
+            annotationOverlay.activeTool = .blur
             window?.makeFirstResponder(annotationOverlay)
         } else {
             toolMode = .none
@@ -802,6 +849,21 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         savePrefs()
     }
 
+    @objc private func blurIntensityChanged(_ s: NSSlider) {
+        let intensity = CGFloat(s.doubleValue)
+        blurIntensityLabel.stringValue = "\(Int(intensity))"
+        annotationOverlay.currentBlurIntensity = intensity
+        annotationOverlay.updateSelectedBlur(intensity: intensity)
+        annotationOverlay.needsDisplay = true
+    }
+
+    @objc private func blurStyleChanged(_ popup: NSPopUpButton) {
+        let style: BlurStyle = popup.indexOfSelectedItem == 0 ? .blur : .pixelate
+        annotationOverlay.currentBlurStyle = style
+        annotationOverlay.updateSelectedBlur(style: style)
+        annotationOverlay.needsDisplay = true
+    }
+
     @objc private func colorPanelChanged() {
         if borderColorWell.isActive {
             borderColor = borderColorWell.color
@@ -945,6 +1007,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         arrowToolButton.isEnabled = false
         textToolButton.isEnabled  = false
         shapeToolButton.isEnabled = false
+        blurToolButton.isEnabled  = false
         cropToolButton.isEnabled  = false
     }
 
@@ -996,11 +1059,13 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         annotationOverlay.arrows.removeAll()
         annotationOverlay.textAnnotations.removeAll()
         annotationOverlay.shapes.removeAll()
+        annotationOverlay.blurRegions.removeAll()
         annotationOverlay.isHidden = false
         placeholderLabel.isHidden = true
         arrowToolButton.isEnabled = true
         textToolButton.isEnabled  = true
         shapeToolButton.isEnabled = true
+        blurToolButton.isEnabled  = true
         cropToolButton.isEnabled  = true
         refreshBaseImage()
         refreshShadow()
