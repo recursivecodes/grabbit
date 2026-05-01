@@ -36,6 +36,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
 
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Open…", action: #selector(openFile), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "New from Clipboard", action: #selector(newFromClipboard), keyEquivalent: "n")
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Close Image", action: Selector(("closeImage:")), keyEquivalent: "w")
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Save", action: Selector(("save:")), keyEquivalent: "s")
         fileMenu.addItem(withTitle: "Save As…", action: Selector(("saveAs:")), keyEquivalent: "S")
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -67,6 +73,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         menu.addItem(quickCaptureMenuItem)
 
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Open Editor", action: #selector(openEditor), keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
@@ -92,6 +100,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
 
     @objc func startCapture()      { CaptureSession.start() }
     @objc func startQuickCapture() { CaptureSession.startQuick() }
+
+    // MARK: - Editor / Clipboard
+
+    @objc func openEditor() {
+        EditorWindowController.showEmpty()
+    }
+
+    @objc func openFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Image"
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .bmp, .gif, .heic, .webP]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url,
+              let image = NSImage(contentsOf: url) else { return }
+
+        if let editor = NSApp.keyWindow?.windowController as? EditorWindowController {
+            editor.replaceImage(image)
+        } else {
+            EditorWindowController.show(image: image)
+        }
+    }
+
+    @objc func newFromClipboard() {
+        let pb = NSPasteboard.general
+
+        guard let image = NSImage(pasteboard: pb) else {
+            let alert = NSAlert()
+            alert.messageText = "No Image on Clipboard"
+            alert.informativeText = "Copy an image to the clipboard first, then choose New from Clipboard."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        if let editor = NSApp.keyWindow?.windowController as? EditorWindowController {
+            editor.replaceImage(image)
+        } else {
+            EditorWindowController.show(image: image)
+        }
+    }
 
     // MARK: - Settings
 

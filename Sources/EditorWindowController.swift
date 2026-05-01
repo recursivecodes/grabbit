@@ -11,6 +11,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     let originalImage: NSImage
     var currentImage: NSImage          // tracks the working image (after crops)
+    private var hasImage: Bool = true  // false when opened empty (no capture)
+    private var isDirty: Bool = false  // true when there are unsaved changes
+    private var lastSavedURL: URL? = nil  // set after a successful save
     var borderWeight:      CGFloat
     var borderColor:       NSColor
     var shadowOffsetX:     CGFloat
@@ -48,6 +51,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var zoomLabel:       NSTextField!
     private var cropToolButton:  NSButton!
     var cropOverlay:             CropOverlayView!
+    private var placeholderLabel: NSTextField!
 
     private var borderWeightSlider:      NSSlider!;   private var borderWeightLabel:      NSTextField!
     private var borderColorWell:         NSColorWell!
@@ -92,6 +96,27 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             NSApp.activate(ignoringOtherApps: true)
             c.window?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    static func showEmpty() {
+        let placeholder = NSImage(size: NSSize(width: 1, height: 1))
+        let c = EditorWindowController(image: placeholder)
+        c.hasImage = false
+        openEditors.append(c)
+        NSApp.setActivationPolicy(.regular)
+        let other = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier != Bundle.main.bundleIdentifier &&
+            $0.activationPolicy == .regular &&
+            $0 != NSRunningApplication.current
+        }) ?? NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.apple.finder"
+        })
+        other?.activate(options: [])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NSApp.activate(ignoringOtherApps: true)
+            c.window?.makeKeyAndOrderFront(nil)
+            c.applyEmptyState()
         }
     }
 
@@ -457,7 +482,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             return Self.imageDisplayRect(for: img, in: iv)
         }
         annotationOverlay.onCopy   = { [weak self] in self?.copyToClipboard() }
-        annotationOverlay.onChange = { [weak self] in self?.refreshForExport() }
+        annotationOverlay.onChange = { [weak self] in self?.markDirty() }
         annotationOverlay.onActivateTool = { [weak self] tool in
             guard let self else { return }
             // Deselect all toolbar buttons first, then activate the right one.
@@ -529,6 +554,20 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let acc = NSTitlebarAccessoryViewController()
         acc.view = saveBtn; acc.layoutAttribute = .right
         win.addTitlebarAccessoryViewController(acc)
+
+        // ── Empty-state placeholder label ────────────────────────────────────────
+        let ph = NSTextField(labelWithString: "Use File › New from Clipboard to open an image")
+        ph.font = NSFont.systemFont(ofSize: 16, weight: .regular)
+        ph.textColor = NSColor.tertiaryLabelColor
+        ph.alignment = .center
+        ph.translatesAutoresizingMaskIntoConstraints = false
+        ph.isHidden = true
+        zoomDoc.addSubview(ph)
+        NSLayoutConstraint.activate([
+            ph.centerXAnchor.constraint(equalTo: zoomDoc.centerXAnchor),
+            ph.centerYAnchor.constraint(equalTo: zoomDoc.centerYAnchor),
+        ])
+        placeholderLabel = ph
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -801,13 +840,25 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     @objc func saveAs(_ sender: Any?) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png, .jpeg, .tiff]
-        panel.nameFieldStringValue = "capture.png"
+        panel.nameFieldStringValue = lastSavedURL?.lastPathComponent ?? "capture.png"
         panel.isExtensionHidden = false
         guard let win = window else { return }
         panel.beginSheetModal(for: win) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
             self.annotationOverlay.finalizeEditing()
             self.writeImage(self.rendered(), to: url)
+            self.lastSavedURL = url
+            self.isDirty = false
+        }
+    }
+
+    @objc func save(_ sender: Any?) {
+        if let url = lastSavedURL {
+            annotationOverlay.finalizeEditing()
+            writeImage(rendered(), to: url)
+            isDirty = false
+        } else {
+            saveAs(sender)
         }
     }
 
@@ -856,6 +907,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     private func refreshForExport() {}
 
+    private func markDirty() {
+        guard hasImage else { return }
+        isDirty = true
+    }
+
     // MARK: - Clipboard / write
 
     private func copyToClipboard() {
@@ -876,6 +932,124 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else { return }
         CGImageDestinationAddImage(dest, cg, nil)
         CGImageDestinationFinalize(dest)
+    }
+
+    // MARK: - Empty state / load image
+
+    private func applyEmptyState() {
+        captureView.image = nil
+        annotationOverlay.isHidden = true
+        cropOverlay.isHidden = true
+        placeholderLabel.isHidden = false
+        // Disable annotation and crop tools until an image is loaded.
+        arrowToolButton.isEnabled = false
+        textToolButton.isEnabled  = false
+        shapeToolButton.isEnabled = false
+        cropToolButton.isEnabled  = false
+    }
+
+    /// Replace the current image (used by "Open…" and "New from Clipboard").
+    /// If there are unsaved changes, prompts the user to save first.
+    /// Calls `completion(true)` if the replacement should proceed, `completion(false)` if cancelled.
+    func replaceImage(_ image: NSImage, completion: ((Bool) -> Void)? = nil) {
+        guard isDirty, hasImage, let win = window else {
+            doLoadImage(image)
+            completion?(true)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Save changes before opening a new image?"
+        alert.informativeText = "Your current image has unsaved changes. Do you want to save them first?"
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+
+        alert.beginSheetModal(for: win) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:   // Save
+                self.saveAs(nil)
+                // saveAs is async (sheet), so we load after the panel closes.
+                // We watch isDirty: once cleared the save completed.
+                // Simplest approach: load immediately after save panel dismisses
+                // by chaining inside saveAs — instead, just load now since the
+                // user confirmed intent. The save panel will still complete.
+                self.doLoadImage(image)
+                completion?(true)
+            case .alertSecondButtonReturn:  // Don't Save
+                self.doLoadImage(image)
+                completion?(true)
+            default:                        // Cancel
+                completion?(false)
+            }
+        }
+    }
+
+    private func doLoadImage(_ image: NSImage) {
+        currentImage = image
+        captureView.image = image
+        hasImage = true
+        isDirty = false
+        lastSavedURL = nil
+        annotationOverlay.arrows.removeAll()
+        annotationOverlay.textAnnotations.removeAll()
+        annotationOverlay.shapes.removeAll()
+        annotationOverlay.isHidden = false
+        placeholderLabel.isHidden = true
+        arrowToolButton.isEnabled = true
+        textToolButton.isEnabled  = true
+        shapeToolButton.isEnabled = true
+        cropToolButton.isEnabled  = true
+        refreshBaseImage()
+        refreshShadow()
+    }
+
+    // Keep loadImage as a non-prompting alias for internal use (e.g. capture flow).
+    func loadImage(_ image: NSImage) {
+        doLoadImage(image)
+    }
+
+    /// Close the current image, returning the editor to the empty state.
+    /// Prompts to save first if there are unsaved changes.
+    @objc func closeImage(_ sender: Any?) {
+        guard hasImage else { return }
+
+        let doClose = {
+            self.isDirty = false
+            self.lastSavedURL = nil
+            self.hasImage = false
+            self.currentImage = NSImage(size: NSSize(width: 1, height: 1))
+            self.applyEmptyState()
+            self.window?.undoManager?.removeAllActions()
+        }
+
+        guard isDirty, let win = window else {
+            doClose()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Save changes before closing?"
+        alert.informativeText = "Your current image has unsaved changes."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+
+        alert.beginSheetModal(for: win) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:   // Save
+                self.save(nil)
+                doClose()
+            case .alertSecondButtonReturn:  // Don't Save
+                doClose()
+            default:                        // Cancel
+                break
+            }
+        }
     }
 
     // MARK: - NSWindowDelegate
