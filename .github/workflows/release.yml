@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Fetch full history so we can walk back to the previous tag.
+          fetch-depth: 0
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -24,28 +27,23 @@ jobs:
           P12_BASE64:  ${{ secrets.SIGNING_CERTIFICATE_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          # Decode the .p12 from the secret
           echo "$P12_BASE64" | base64 --decode -o /tmp/grabbit-dev.p12
 
-          # Create a short-lived keychain so the cert doesn't touch the login keychain
           KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
           security create-keychain -p "$KEYCHAIN_PASSWORD" grabbit-build.keychain
           security set-keychain-settings -lut 3600 grabbit-build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" grabbit-build.keychain
 
-          # Import the certificate
           security import /tmp/grabbit-dev.p12 \
             -k grabbit-build.keychain \
             -P "$P12_PASSWORD" \
             -T /usr/bin/codesign \
             -f pkcs12
 
-          # Allow codesign to access the key without a UI prompt
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" grabbit-build.keychain
 
-          # Add to the search list so codesign can find it by name
           security list-keychains -d user -s grabbit-build.keychain $(security list-keychains -d user | tr -d '"')
 
           rm /tmp/grabbit-dev.p12
@@ -63,26 +61,63 @@ jobs:
           cd build
           zip -r --symlinks Grabbit.zip Grabbit.app
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+
+          # Find the previous tag. If there isn't one this is the first release,
+          # so we include every commit.
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="${PREVIOUS_TAG}..${CURRENT_TAG}"
+            SINCE_TEXT="Changes since ${PREVIOUS_TAG}"
+          else
+            RANGE="${CURRENT_TAG}"
+            SINCE_TEXT="All commits"
+          fi
+
+          # Build the commit list: "- <subject> (<short-hash>)"
+          COMMITS=$(git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges)
+
+          if [ -z "$COMMITS" ]; then
+            COMMITS="- No changes recorded"
+          fi
+
+          # Write to a temp file to avoid quoting/escaping issues with multiline
+          # strings in GITHUB_OUTPUT.
+          cat > /tmp/release_notes.md << NOTES
+          ## Grabbit ${CURRENT_TAG}
+
+          ### What's changed
+          ${SINCE_TEXT}:
+
+          ${COMMITS}
+
+          ### Installation
+          1. Download **Grabbit.zip** below and unzip it.
+          2. Move **Grabbit.app** to your \`/Applications\` folder.
+          3. Because the app is unsigned, macOS will quarantine it on first download.
+             Remove the quarantine attribute before opening:
+             \`\`\`
+             xattr -dr com.apple.quarantine /Applications/Grabbit.app
+             \`\`\`
+          4. Open Grabbit from \`/Applications\` or Spotlight.
+
+          > **Note:** Screen Recording permission is required. macOS will prompt you on first launch,
+          > or you can grant it manually in **System Settings → Privacy & Security → Screen Recording**.
+          NOTES
+
+          # Expose the file path as an output for the release step.
+          echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Grabbit ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          body: |
-            ## Grabbit ${{ github.ref_name }}
-
-            ### Installation
-            1. Download **Grabbit.zip** below and unzip it.
-            2. Move **Grabbit.app** to your `/Applications` folder.
-            3. Because the app is unsigned, macOS will quarantine it on first download.
-               Remove the quarantine attribute before opening:
-               ```
-               xattr -dr com.apple.quarantine /Applications/Grabbit.app
-               ```
-            4. Open Grabbit from `/Applications` or Spotlight.
-
-            > **Note:** Screen Recording permission is required. macOS will prompt you on first launch,
-            > or you can grant it manually in **System Settings → Privacy & Security → Screen Recording**.
+          body_path: ${{ steps.notes.outputs.notes_file }}
           files: build/Grabbit.zip
           draft: false
           prerelease: false
