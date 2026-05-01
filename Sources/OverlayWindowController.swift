@@ -109,7 +109,7 @@ class OverlayWindowController: NSWindowController {
         // activates — having a screenSaver-level window close during activation
         // can interfere with the menu bar appearing.
         dismiss()
-        EditorWindowController.show(image: cropped)
+        CaptureSession.captureDidFinish(image: cropped)
     }
 }
 

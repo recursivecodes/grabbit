@@ -5,6 +5,7 @@ import Carbon.HIToolbox
 
 protocol SettingsWindowControllerDelegate: AnyObject {
     func settingsDidUpdateHotkey(_ config: HotkeyConfig)
+    func settingsDidUpdateQuickHotkey(_ config: HotkeyConfig)
 }
 
 // MARK: - SettingsWindowController
@@ -12,17 +13,23 @@ protocol SettingsWindowControllerDelegate: AnyObject {
 class SettingsWindowController: NSWindowController {
     weak var delegate: SettingsWindowControllerDelegate?
 
-    private var currentConfig: HotkeyConfig
-    private var hotkeyRecorder: HotkeyRecorderView!
-    private var previewLabel: NSTextField!
+    private var currentConfig:      HotkeyConfig
+    private var currentQuickConfig: HotkeyConfig
+    private var hotkeyRecorder:      HotkeyRecorderView!
+    private var quickHotkeyRecorder: HotkeyRecorderView!
+    private var previewLabel:      NSTextField!
+    private var quickPreviewLabel: NSTextField!
 
     private static var shared: SettingsWindowController?
 
-    static func show(currentConfig: HotkeyConfig, delegate: SettingsWindowControllerDelegate) {
+    static func show(currentConfig: HotkeyConfig,
+                     quickConfig: HotkeyConfig,
+                     delegate: SettingsWindowControllerDelegate) {
         if shared == nil {
-            shared = SettingsWindowController(config: currentConfig)
+            shared = SettingsWindowController(config: currentConfig, quickConfig: quickConfig)
         }
-        shared?.currentConfig = currentConfig
+        shared?.currentConfig      = currentConfig
+        shared?.currentQuickConfig = quickConfig
         shared?.delegate = delegate
         shared?.refreshUI()
         shared?.showWindow(nil)
@@ -30,11 +37,12 @@ class SettingsWindowController: NSWindowController {
         shared?.window?.makeKeyAndOrderFront(nil)
     }
 
-    init(config: HotkeyConfig) {
-        self.currentConfig = config
+    init(config: HotkeyConfig, quickConfig: HotkeyConfig) {
+        self.currentConfig      = config
+        self.currentQuickConfig = quickConfig
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -52,69 +60,122 @@ class SettingsWindowController: NSWindowController {
     // MARK: - UI
 
     private func buildUI() {
-        guard let contentView = window?.contentView else { return }
+        guard let cv = window?.contentView else { return }
 
-        // Section label
-        let sectionLabel = NSTextField(labelWithString: "Keyboard Shortcut")
+        // ── Section header ───────────────────────────────────────────────────────
+        let sectionLabel = NSTextField(labelWithString: "Keyboard Shortcuts")
         sectionLabel.font = .boldSystemFont(ofSize: 13)
         sectionLabel.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(sectionLabel)
+        cv.addSubview(sectionLabel)
 
-        let descLabel = NSTextField(labelWithString: "Click the field below and press your desired shortcut.")
+        let descLabel = NSTextField(labelWithString: "Click a field and press your desired shortcut.")
         descLabel.font = .systemFont(ofSize: 11)
         descLabel.textColor = .secondaryLabelColor
         descLabel.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(descLabel)
+        cv.addSubview(descLabel)
 
-        // Hotkey recorder
+        // ── Capture (editor) row ─────────────────────────────────────────────────
+        let captureRowLabel = NSTextField(labelWithString: "Capture & Edit")
+        captureRowLabel.font = .systemFont(ofSize: 12)
+        captureRowLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(captureRowLabel)
+
         hotkeyRecorder = HotkeyRecorderView(config: currentConfig)
         hotkeyRecorder.translatesAutoresizingMaskIntoConstraints = false
         hotkeyRecorder.onConfigChanged = { [weak self] newConfig in
             self?.currentConfig = newConfig
             self?.refreshPreview()
         }
-        contentView.addSubview(hotkeyRecorder)
+        cv.addSubview(hotkeyRecorder)
 
-        // Preview label
         previewLabel = NSTextField(labelWithString: "")
         previewLabel.font = .systemFont(ofSize: 12)
         previewLabel.textColor = .secondaryLabelColor
         previewLabel.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(previewLabel)
+        cv.addSubview(previewLabel)
 
-        // Buttons
+        // ── Quick Capture (clipboard) row ────────────────────────────────────────
+        let quickRowLabel = NSTextField(labelWithString: "Quick Capture")
+        quickRowLabel.font = .systemFont(ofSize: 12)
+        quickRowLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(quickRowLabel)
+
+        let quickDescLabel = NSTextField(labelWithString: "Copies region directly to clipboard, no editor.")
+        quickDescLabel.font = .systemFont(ofSize: 10)
+        quickDescLabel.textColor = .secondaryLabelColor
+        quickDescLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(quickDescLabel)
+
+        quickHotkeyRecorder = HotkeyRecorderView(config: currentQuickConfig)
+        quickHotkeyRecorder.translatesAutoresizingMaskIntoConstraints = false
+        quickHotkeyRecorder.onConfigChanged = { [weak self] newConfig in
+            self?.currentQuickConfig = newConfig
+            self?.refreshPreview()
+        }
+        cv.addSubview(quickHotkeyRecorder)
+
+        quickPreviewLabel = NSTextField(labelWithString: "")
+        quickPreviewLabel.font = .systemFont(ofSize: 12)
+        quickPreviewLabel.textColor = .secondaryLabelColor
+        quickPreviewLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(quickPreviewLabel)
+
+        // ── Buttons ──────────────────────────────────────────────────────────────
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancelButton.keyEquivalent = "\u{1b}"
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(cancelButton)
+        cv.addSubview(cancelButton)
 
         let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
         saveButton.keyEquivalent = "\r"
         saveButton.bezelStyle = .rounded
         saveButton.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(saveButton)
+        cv.addSubview(saveButton)
 
+        // ── Layout ───────────────────────────────────────────────────────────────
         NSLayoutConstraint.activate([
-            sectionLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
-            sectionLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            sectionLabel.topAnchor.constraint(equalTo: cv.topAnchor, constant: 20),
+            sectionLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
 
             descLabel.topAnchor.constraint(equalTo: sectionLabel.bottomAnchor, constant: 4),
-            descLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
-            descLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            descLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            descLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
 
-            hotkeyRecorder.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 12),
-            hotkeyRecorder.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
-            hotkeyRecorder.widthAnchor.constraint(equalToConstant: 160),
+            // Capture & Edit row
+            captureRowLabel.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 16),
+            captureRowLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            captureRowLabel.widthAnchor.constraint(equalToConstant: 100),
+
+            hotkeyRecorder.centerYAnchor.constraint(equalTo: captureRowLabel.centerYAnchor),
+            hotkeyRecorder.leadingAnchor.constraint(equalTo: captureRowLabel.trailingAnchor, constant: 8),
+            hotkeyRecorder.widthAnchor.constraint(equalToConstant: 140),
             hotkeyRecorder.heightAnchor.constraint(equalToConstant: 28),
 
             previewLabel.centerYAnchor.constraint(equalTo: hotkeyRecorder.centerYAnchor),
-            previewLabel.leadingAnchor.constraint(equalTo: hotkeyRecorder.trailingAnchor, constant: 12),
+            previewLabel.leadingAnchor.constraint(equalTo: hotkeyRecorder.trailingAnchor, constant: 10),
 
-            cancelButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
+            // Quick Capture row
+            quickRowLabel.topAnchor.constraint(equalTo: captureRowLabel.bottomAnchor, constant: 20),
+            quickRowLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            quickRowLabel.widthAnchor.constraint(equalToConstant: 100),
+
+            quickHotkeyRecorder.centerYAnchor.constraint(equalTo: quickRowLabel.centerYAnchor),
+            quickHotkeyRecorder.leadingAnchor.constraint(equalTo: quickRowLabel.trailingAnchor, constant: 8),
+            quickHotkeyRecorder.widthAnchor.constraint(equalToConstant: 140),
+            quickHotkeyRecorder.heightAnchor.constraint(equalToConstant: 28),
+
+            quickPreviewLabel.centerYAnchor.constraint(equalTo: quickHotkeyRecorder.centerYAnchor),
+            quickPreviewLabel.leadingAnchor.constraint(equalTo: quickHotkeyRecorder.trailingAnchor, constant: 10),
+
+            quickDescLabel.topAnchor.constraint(equalTo: quickRowLabel.bottomAnchor, constant: 4),
+            quickDescLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            quickDescLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+
+            cancelButton.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
             cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
 
-            saveButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
-            saveButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            saveButton.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
+            saveButton.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
         ])
 
         refreshPreview()
@@ -122,21 +183,22 @@ class SettingsWindowController: NSWindowController {
 
     private func refreshUI() {
         hotkeyRecorder?.setConfig(currentConfig)
+        quickHotkeyRecorder?.setConfig(currentQuickConfig)
         refreshPreview()
     }
 
     private func refreshPreview() {
-        previewLabel?.stringValue = currentConfig.displayString
+        previewLabel?.stringValue      = currentConfig.displayString
+        quickPreviewLabel?.stringValue = currentQuickConfig.displayString
     }
 
     // MARK: - Actions
 
-    @objc private func cancel() {
-        close()
-    }
+    @objc private func cancel() { close() }
 
     @objc private func save() {
         delegate?.settingsDidUpdateHotkey(currentConfig)
+        delegate?.settingsDidUpdateQuickHotkey(currentQuickConfig)
         close()
     }
 }
@@ -199,24 +261,17 @@ class HotkeyRecorderView: NSView {
         }
     }
 
-    // MARK: Mouse / focus
-
     override func mouseDown(with event: NSEvent) {
-        if isRecording {
-            stopRecording()
-        } else {
-            startRecording()
-        }
+        isRecording ? stopRecording() : startRecording()
     }
 
     private func startRecording() {
         isRecording = true
         updateLabel()
-
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             self.handleKeyEvent(event)
-            return nil  // consume the event
+            return nil
         }
     }
 
@@ -227,18 +282,10 @@ class HotkeyRecorderView: NSView {
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
-        // Escape cancels recording without changing the shortcut
-        if event.keyCode == UInt16(kVK_Escape) {
-            stopRecording()
-            return
-        }
-
+        if event.keyCode == UInt16(kVK_Escape) { stopRecording(); return }
         let carbonMods = carbonModifiers(from: event.modifierFlags)
-
-        // Require at least one modifier (other than Shift alone)
         let hasModifier = (carbonMods & UInt32(cmdKey | optionKey | controlKey)) != 0
         guard hasModifier else { return }
-
         let newConfig = HotkeyConfig(keyCode: UInt32(event.keyCode), modifiers: carbonMods)
         config = newConfig
         stopRecording()

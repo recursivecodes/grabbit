@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import ScreenCaptureKit
+import UserNotifications
 
 class CaptureSession {
 
@@ -8,7 +9,19 @@ class CaptureSession {
     // or while the async SCK capture is still in flight).
     private static var isCapturing = false
 
+    // Mode for the current capture.
+    private enum Mode { case editor, quickClipboard }
+    private static var mode: Mode = .editor
+
     static func start() {
+        beginCapture(mode: .editor)
+    }
+
+    static func startQuick() {
+        beginCapture(mode: .quickClipboard)
+    }
+
+    private static func beginCapture(mode: Mode) {
         guard !isCapturing else {
             NSLog("Grabbit: capture already in progress, ignoring hotkey")
             return
@@ -25,6 +38,7 @@ class CaptureSession {
         guard let screen = NSScreen.main else { return }
 
         isCapturing = true
+        Self.mode = mode
 
         if #available(macOS 14.0, *) {
             captureWithSCK(screen: screen)
@@ -37,6 +51,36 @@ class CaptureSession {
     // whether by a successful selection, a cancel, or an error.
     static func captureDidEnd() {
         isCapturing = false
+    }
+
+    // Called by OverlayWindowController with the cropped image once the user
+    // makes a selection. Routes to editor or clipboard depending on mode.
+    static func captureDidFinish(image: NSImage) {
+        switch mode {
+        case .editor:
+            EditorWindowController.show(image: image)
+        case .quickClipboard:
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([image])
+            sendClipboardNotification()
+        }
+    }
+
+    private static func sendClipboardNotification() {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Grabbit"
+            content.body  = "Screenshot copied to clipboard."
+            let request = UNNotificationRequest(
+                identifier: "grabbit.quickcapture.\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
+        }
     }
 
     // MARK: - ScreenCaptureKit path (macOS 14+)

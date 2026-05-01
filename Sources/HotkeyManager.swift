@@ -6,15 +6,23 @@ struct HotkeyConfig: Equatable {
     var keyCode: UInt32
     var modifiers: UInt32  // Carbon modifier flags
 
-    // Default: Opt+Shift+P
+    // Default: Opt+Shift+P  (editor capture)
     static let defaultConfig = HotkeyConfig(
         keyCode: UInt32(kVK_ANSI_P),
         modifiers: UInt32(optionKey | shiftKey)
     )
 
+    // Default: Opt+P  (quick copy-to-clipboard capture)
+    static let defaultQuickConfig = HotkeyConfig(
+        keyCode: UInt32(kVK_ANSI_P),
+        modifiers: UInt32(optionKey)
+    )
+
     // UserDefaults keys
     private static let keyCodeKey   = "grabbit.hotkeyKeyCode"
     private static let modifiersKey = "grabbit.hotkeyModifiers"
+    private static let quickKeyCodeKey   = "grabbit.quickHotkeyKeyCode"
+    private static let quickModifiersKey = "grabbit.quickHotkeyModifiers"
 
     static func load() -> HotkeyConfig {
         let ud = UserDefaults.standard
@@ -25,10 +33,25 @@ struct HotkeyConfig: Equatable {
         )
     }
 
+    static func loadQuick() -> HotkeyConfig {
+        let ud = UserDefaults.standard
+        guard ud.object(forKey: quickKeyCodeKey) != nil else { return .defaultQuickConfig }
+        return HotkeyConfig(
+            keyCode:   UInt32(ud.integer(forKey: quickKeyCodeKey)),
+            modifiers: UInt32(ud.integer(forKey: quickModifiersKey))
+        )
+    }
+
     func save() {
         let ud = UserDefaults.standard
         ud.set(Int(keyCode),   forKey: HotkeyConfig.keyCodeKey)
         ud.set(Int(modifiers), forKey: HotkeyConfig.modifiersKey)
+    }
+
+    func saveQuick() {
+        let ud = UserDefaults.standard
+        ud.set(Int(keyCode),   forKey: HotkeyConfig.quickKeyCodeKey)
+        ud.set(Int(modifiers), forKey: HotkeyConfig.quickModifiersKey)
     }
 
     /// Human-readable string, e.g. "⌥⇧P"
@@ -98,65 +121,82 @@ struct HotkeyConfig: Equatable {
 }
 
 // MARK: - Global C callback
+// Routes by hotkey ID: 1 = editor capture, 2 = quick clipboard capture.
 
-private var _hotkeyCallback: (() -> Void)?
+private var _hotkeyCallbacks: [UInt32: () -> Void] = [:]
 
 private func hotkeyEventHandler(
     _ nextHandler: EventHandlerCallRef?,
     _ event: EventRef?,
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    DispatchQueue.main.async { _hotkeyCallback?() }
+    var hotKeyID = EventHotKeyID()
+    GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                      EventParamType(typeEventHotKeyID), nil,
+                      MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+    let id = hotKeyID.id
+    DispatchQueue.main.async { _hotkeyCallbacks[id]?() }
     return noErr
 }
 
 // MARK: - HotkeyManager
 
 class HotkeyManager {
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRef:      EventHotKeyRef?
+    private var quickHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
-    private(set) var config: HotkeyConfig
 
-    init(config: HotkeyConfig = .load(), callback: @escaping () -> Void) {
-        self.config = config
-        _hotkeyCallback = callback
-        register(config: config)
+    private(set) var config:      HotkeyConfig
+    private(set) var quickConfig: HotkeyConfig
+
+    init(config: HotkeyConfig = .load(),
+         quickConfig: HotkeyConfig = .loadQuick(),
+         onCapture: @escaping () -> Void,
+         onQuickCapture: @escaping () -> Void) {
+        self.config      = config
+        self.quickConfig = quickConfig
+        _hotkeyCallbacks[1] = onCapture
+        _hotkeyCallbacks[2] = onQuickCapture
+        installHandler()
+        register(config: config,      ref: &hotKeyRef,      id: 1)
+        register(config: quickConfig, ref: &quickHotKeyRef, id: 2)
     }
 
-    /// Unregister old hotkey and register a new one.
+    /// Update the editor-capture hotkey.
     func update(config: HotkeyConfig) {
-        unregister()
+        unregister(&hotKeyRef)
         self.config = config
         config.save()
-        register(config: config)
+        register(config: config, ref: &hotKeyRef, id: 1)
+    }
+
+    /// Update the quick-capture hotkey.
+    func updateQuick(config: HotkeyConfig) {
+        unregister(&quickHotKeyRef)
+        self.quickConfig = config
+        config.saveQuick()
+        register(config: config, ref: &quickHotKeyRef, id: 2)
     }
 
     // MARK: Private
 
-    private func register(config: HotkeyConfig) {
-        let hotKeyID = EventHotKeyID(signature: 0x67726162, id: 1)
-        RegisterEventHotKey(
-            config.keyCode,
-            config.modifiers,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
+    private func installHandler() {
+        guard eventHandlerRef == nil else { return }
+        var spec = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
         )
-
-        if eventHandlerRef == nil {
-            var spec = EventTypeSpec(
-                eventClass: OSType(kEventClassKeyboard),
-                eventKind: UInt32(kEventHotKeyPressed)
-            )
-            InstallEventHandler(GetApplicationEventTarget(), hotkeyEventHandler, 1, &spec, nil, &eventHandlerRef)
-        }
+        InstallEventHandler(GetApplicationEventTarget(), hotkeyEventHandler,
+                            1, &spec, nil, &eventHandlerRef)
     }
 
-    private func unregister() {
-        if let ref = hotKeyRef {
-            UnregisterEventHotKey(ref)
-            hotKeyRef = nil
-        }
+    private func register(config: HotkeyConfig, ref: inout EventHotKeyRef?, id: UInt32) {
+        let hotKeyID = EventHotKeyID(signature: 0x67726162, id: id)
+        RegisterEventHotKey(config.keyCode, config.modifiers, hotKeyID,
+                            GetApplicationEventTarget(), 0, &ref)
+    }
+
+    private func unregister(_ ref: inout EventHotKeyRef?) {
+        if let r = ref { UnregisterEventHotKey(r); ref = nil }
     }
 }

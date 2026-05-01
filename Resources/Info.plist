@@ -18,5 +18,9 @@
     <string>NSApplication</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Grabbit captures a region of your screen when you trigger a capture.</string>
+    <key>NSUserNotificationAlertStyle</key>
+    <string>alert</string>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
 </dict>
 </plist>
