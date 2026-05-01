@@ -16,6 +16,7 @@ enum ShapeType {
 
 struct Shape {
     var id = UUID()
+    var zOrder: Int = 0
     var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
     var shapeType: ShapeType
     var borderWeight: CGFloat
@@ -27,6 +28,7 @@ struct Shape {
 
 struct Arrow {
     var id = UUID()
+    var zOrder: Int = 0
     var start: CGPoint  // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
     var end: CGPoint
     var weight: CGFloat
@@ -37,6 +39,7 @@ struct Arrow {
 
 struct TextAnnotation {
     var id = UUID()
+    var zOrder: Int = 0
     var position: CGPoint   // normalized 0-1, y=0 at bottom; baseline-left of text in view coords
     var content: String
     var fontName: String
@@ -88,6 +91,10 @@ class AnnotationOverlay: NSView {
     var currentBorderColor:   NSColor = .black
     var currentFillColor:     NSColor = .clear
 
+    // MARK: Z-order counter — incremented each time a new annotation is added.
+    private var zOrderCounter: Int = 0
+    private func nextZOrder() -> Int { zOrderCounter += 1; return zOrderCounter }
+
     // MARK: Active tool
     var activeTool: AnnotationTool = .none {
         didSet {
@@ -105,11 +112,14 @@ class AnnotationOverlay: NSView {
         set { activeTool = newValue ? .arrow : .none }
     }
 
-    // MARK: Callbacks
+    // Callbacks
     var imageDisplayRectProvider: (() -> CGRect)?
     var onCopy:   (() -> Void)?
     var onChange: (() -> Void)?
     var onTextSelectionChanged: ((TextAnnotation?) -> Void)?
+    // Called when a click in .none mode hits an annotation — activates the
+    // matching tool and selects the item so the sidebar shows its properties.
+    var onActivateTool: ((AnnotationTool) -> Void)?
 
     // MARK: Private state
     private var selectedArrowID: UUID?
@@ -146,27 +156,45 @@ class AnnotationOverlay: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        // Arrows
+        // Build a unified draw list sorted by zOrder so layering is respected.
+        struct DrawItem { let zOrder: Int; let draw: () -> Void }
+        var items: [DrawItem] = []
+
         for arrow in arrows {
-            renderArrow(from: toView(arrow.start), to: toView(arrow.end),
-                        weight: arrow.weight, color: arrow.color)
+            let a = arrow
+            items.append(DrawItem(zOrder: a.zOrder) {
+                self.renderArrow(from: self.toView(a.start), to: self.toView(a.end),
+                                 weight: a.weight, color: a.color)
+                if self.selectedArrowID == a.id {
+                    self.drawArrowTailHandle(at: self.toView(a.start))
+                }
+            })
         }
+        for ann in textAnnotations {
+            let a = ann
+            guard a.id != editingID else { continue }
+            items.append(DrawItem(zOrder: a.zOrder) {
+                self.drawTextAnnotation(a, selected: self.selectedTextID == a.id)
+            })
+        }
+        for shape in shapes {
+            let s = shape
+            items.append(DrawItem(zOrder: s.zOrder) {
+                self.drawShape(s, selected: self.selectedShapeID == s.id)
+                if self.selectedShapeID == s.id {
+                    self.drawShapeResizeHandle(at: self.toView(s.rect.origin))
+                    let brPoint = self.toView(CGPoint(x: s.rect.origin.x + s.rect.width,
+                                                     y: s.rect.origin.y))
+                    self.drawShapeResizeHandleBottomRight(at: brPoint)
+                }
+            })
+        }
+
+        items.sorted { $0.zOrder < $1.zOrder }.forEach { $0.draw() }
+
+        // In-progress new annotations drawn on top of everything.
         if case .newArrow(let s, let c) = dragState {
             renderArrow(from: s, to: c, weight: currentWeight, color: currentColor)
-        }
-        if let selID = selectedArrowID, let arrow = arrows.first(where: { $0.id == selID }) {
-            drawArrowTailHandle(at: toView(arrow.start))
-        }
-
-        // Text annotations (skip the one currently being edited via inline field)
-        for ann in textAnnotations {
-            guard ann.id != editingID else { continue }
-            drawTextAnnotation(ann, selected: ann.id == selectedTextID)
-        }
-
-        // Shapes
-        for shape in shapes {
-            drawShape(shape, selected: shape.id == selectedShapeID)
         }
         if case .newShape(let s, let c) = dragState {
             var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
@@ -174,12 +202,6 @@ class AnnotationOverlay: NSView {
             drawShapeRect(rect, shapeType: currentShapeType,
                          borderWeight: currentBorderWeight, borderColor: currentBorderColor,
                          fillColor: currentFillColor, selected: false)
-        }
-        if let selID = selectedShapeID, let shape = shapes.first(where: { $0.id == selID }) {
-            drawShapeResizeHandle(at: toView(shape.rect.origin))
-            let brPoint = toView(CGPoint(x: shape.rect.origin.x + shape.rect.width,
-                                        y: shape.rect.origin.y))
-            drawShapeResizeHandleBottomRight(at: brPoint)
         }
     }
 
@@ -327,6 +349,30 @@ class AnnotationOverlay: NSView {
 
     // MARK: - Mouse
 
+    // Returns the tool type and index if the point hits any annotation,
+    // regardless of which tool is currently active.
+    private func hitTestAny(at loc: CGPoint) -> (AnnotationTool, Int)? {
+        if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) { return (.arrow, idx) }
+        if let idx = textIndex(near: loc)  { return (.text,  idx) }
+        if let idx = shapeIndex(near: loc) { return (.shape, idx) }
+        return nil
+    }
+
+    // Selects the annotation at (tool, idx) and fires onActivateTool if the
+    // tool differs from the current one.
+    private func selectAnnotation(tool: AnnotationTool, index idx: Int) {
+        switch tool {
+        case .arrow: selectedArrowID = arrows[idx].id
+        case .text:  selectedTextID  = textAnnotations[idx].id
+        case .shape: selectedShapeID = shapes[idx].id
+        case .none:  break
+        }
+        if tool != activeTool {
+            onActivateTool?(tool)
+        }
+        needsDisplay = true
+    }
+
     override func mouseDown(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
 
@@ -339,7 +385,11 @@ class AnnotationOverlay: NSView {
             } else if let idx = arrowBodyIndex(near: loc) {
                 dragState = .movingArrowWhole(index: idx, lastLoc: loc)
                 selectedArrowID = arrows[idx].id
+            } else if let (tool, idx) = hitTestAny(at: loc) {
+                // Clicked a different annotation type — switch to it.
+                selectAnnotation(tool: tool, index: idx)
             } else {
+                // Empty space — start a new arrow.
                 dragState = .newArrow(start: loc, current: loc)
                 selectedArrowID = nil
             }
@@ -355,12 +405,14 @@ class AnnotationOverlay: NSView {
                 if event.clickCount >= 2 {
                     beginEditing(index: idx)
                 } else if !wasEditing {
-                    // Only start a drag if we weren't just finishing an edit.
                     dragState = .movingText(index: idx, lastLoc: loc)
                 }
+            } else if let (tool, idx) = hitTestAny(at: loc), tool != .text {
+                // Clicked a different annotation type — switch to it.
+                selectAnnotation(tool: tool, index: idx)
             } else if !wasEditing {
-                // Create new text annotation at click location.
-                let ann = TextAnnotation(
+                // Empty space — create a new text annotation.
+                var ann = TextAnnotation(
                     position: toNorm(loc), content: "",
                     fontName: currentFontName,
                     fontSize: currentFontSize,
@@ -368,6 +420,7 @@ class AnnotationOverlay: NSView {
                     outlineColor: currentOutlineColor,
                     outlineWeight: currentOutlineWeight
                 )
+                ann.zOrder = nextZOrder()
                 textAnnotations.append(ann)
                 selectedTextID = ann.id
                 needsDisplay = true
@@ -378,7 +431,7 @@ class AnnotationOverlay: NSView {
             }
 
         case .shape:
-            // Check if clicking on resize handle of selected shape first
+            // Check resize handle of selected shape first.
             if let selID = selectedShapeID,
                let selIdx = shapes.firstIndex(where: { $0.id == selID }) {
                 let shape = shapes[selIdx]
@@ -391,18 +444,26 @@ class AnnotationOverlay: NSView {
                     break
                 }
             }
-            // Otherwise check if clicking on any shape
             if let idx = shapeIndex(near: loc) {
                 selectedShapeID = shapes[idx].id
                 dragState = .movingShapeWhole(index: idx, lastLoc: loc)
                 needsDisplay = true
+            } else if let (tool, idx) = hitTestAny(at: loc), tool != .shape {
+                // Clicked a different annotation type — switch to it.
+                selectAnnotation(tool: tool, index: idx)
             } else {
+                // Empty space — start a new shape.
                 dragState = .newShape(start: loc, current: loc)
                 selectedShapeID = nil
                 needsDisplay = true
             }
 
-        case .none: break
+        case .none:
+            // No tool active — clicking any annotation activates its tool.
+            if let (tool, idx) = hitTestAny(at: loc) {
+                selectAnnotation(tool: tool, index: idx)
+            }
+            needsDisplay = true
         }
     }
 
@@ -456,8 +517,9 @@ class AnnotationOverlay: NSView {
         switch dragState {
         case .newArrow(let s, let c):
             if hypot(c.x - s.x, c.y - s.y) > 8 {
-                let a = Arrow(start: toNorm(s), end: toNorm(c),
+                var a = Arrow(start: toNorm(s), end: toNorm(c),
                               weight: currentWeight, color: currentColor)
+                a.zOrder = nextZOrder()
                 arrows.append(a); selectedArrowID = a.id; onChange?()
             } else {
                 selectedArrowID = nil
@@ -472,10 +534,11 @@ class AnnotationOverlay: NSView {
                                      y: normOrigin.y,
                                      width: rect.size.width / imageDisplayRect.width,
                                      height: rect.size.height / imageDisplayRect.height)
-                let shape = Shape(rect: normRect, shapeType: currentShapeType,
+                var shape = Shape(rect: normRect, shapeType: currentShapeType,
                                  borderWeight: currentBorderWeight,
                                  borderColor: currentBorderColor,
                                  fillColor: currentFillColor)
+                shape.zOrder = nextZOrder()
                 shapes.append(shape); selectedShapeID = shape.id; onChange?()
             } else {
                 selectedShapeID = nil
@@ -620,47 +683,137 @@ class AnnotationOverlay: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let loc = convert(event.locationInWindow, from: nil)
         let menu = NSMenu()
-        if activeTool == .arrow, let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) {
-            let item = menu.addItem(withTitle: "Delete Arrow",
-                                    action: #selector(menuDeleteArrow(_:)), keyEquivalent: "")
-            item.target = self; item.representedObject = arrows[idx].id
+
+        // Determine what was right-clicked.
+        enum HitItem {
+            case arrow(UUID)
+            case text(UUID)
+            case shape(UUID)
+        }
+        var hit: HitItem?
+        if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) {
+            hit = .arrow(arrows[idx].id)
+        } else if let idx = textIndex(near: loc) {
+            hit = .text(textAnnotations[idx].id)
+        } else if let idx = shapeIndex(near: loc) {
+            hit = .shape(shapes[idx].id)
+        }
+
+        if let hit {
+            let id: UUID
+            let deleteTitle: String
+            switch hit {
+            case .arrow(let u):  id = u; deleteTitle = "Delete Arrow"
+            case .text(let u):   id = u; deleteTitle = "Delete Text"
+            case .shape(let u):  id = u; deleteTitle = "Delete Shape"
+            }
+
+            // Layering submenu
+            let layerMenu = NSMenu(title: "Arrange")
+            func layerItem(_ title: String, _ sel: Selector) -> NSMenuItem {
+                let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+                item.target = self; item.representedObject = id; return item
+            }
+            layerMenu.addItem(layerItem("Bring to Front",  #selector(menuBringToFront(_:))))
+            layerMenu.addItem(layerItem("Bring Forward",   #selector(menuBringForward(_:))))
+            layerMenu.addItem(layerItem("Send Backward",   #selector(menuSendBackward(_:))))
+            layerMenu.addItem(layerItem("Send to Back",    #selector(menuSendToBack(_:))))
+
+            let arrangeItem = NSMenuItem(title: "Arrange", action: nil, keyEquivalent: "")
+            arrangeItem.submenu = layerMenu
+            menu.addItem(arrangeItem)
+            menu.addItem(.separator())
+
+            let del = menu.addItem(withTitle: deleteTitle, action: #selector(menuDeleteAny(_:)), keyEquivalent: "")
+            del.target = self; del.representedObject = id
             menu.addItem(.separator())
         }
-        if activeTool == .text, let idx = textIndex(near: loc) {
-            let item = menu.addItem(withTitle: "Delete Text",
-                                    action: #selector(menuDeleteText(_:)), keyEquivalent: "")
-            item.target = self; item.representedObject = textAnnotations[idx].id
-            menu.addItem(.separator())
-        }
-        if activeTool == .shape, let idx = shapeIndex(near: loc) {
-            let item = menu.addItem(withTitle: "Delete Shape",
-                                    action: #selector(menuDeleteShape(_:)), keyEquivalent: "")
-            item.target = self; item.representedObject = shapes[idx].id
-            menu.addItem(.separator())
-        }
-        let copy = menu.addItem(withTitle: "Copy Image",
-                                action: #selector(menuCopy(_:)), keyEquivalent: "")
+
+        let copy = menu.addItem(withTitle: "Copy Image", action: #selector(menuCopy(_:)), keyEquivalent: "")
         copy.target = self
         return menu
     }
 
-    @objc private func menuDeleteArrow(_ item: NSMenuItem) {
+    // MARK: Layering helpers
+
+    // Returns the current zOrder for any annotation ID.
+    private func zOrder(for id: UUID) -> Int? {
+        if let a = arrows.first(where: { $0.id == id })            { return a.zOrder }
+        if let t = textAnnotations.first(where: { $0.id == id })   { return t.zOrder }
+        if let s = shapes.first(where: { $0.id == id })            { return s.zOrder }
+        return nil
+    }
+
+    private func setZOrder(_ z: Int, for id: UUID) {
+        if let i = arrows.firstIndex(where: { $0.id == id })          { arrows[i].zOrder = z }
+        if let i = textAnnotations.firstIndex(where: { $0.id == id }) { textAnnotations[i].zOrder = z }
+        if let i = shapes.firstIndex(where: { $0.id == id })          { shapes[i].zOrder = z }
+    }
+
+    private func allZOrders() -> [(id: UUID, z: Int)] {
+        var all: [(UUID, Int)] = []
+        arrows.forEach          { all.append(($0.id, $0.zOrder)) }
+        textAnnotations.forEach { all.append(($0.id, $0.zOrder)) }
+        shapes.forEach          { all.append(($0.id, $0.zOrder)) }
+        return all.sorted { $0.1 < $1.1 }
+    }
+
+    // Renormalises all z-orders to 1…n to keep them tidy after reordering.
+    private func compactZOrders() {
+        let sorted = allZOrders()
+        for (rank, item) in sorted.enumerated() {
+            setZOrder(rank + 1, for: item.id)
+        }
+        zOrderCounter = sorted.count
+    }
+
+    @objc private func menuBringToFront(_ item: NSMenuItem) {
         guard let id = item.representedObject as? UUID else { return }
-        arrows.removeAll { $0.id == id }
-        if selectedArrowID == id { selectedArrowID = nil }
+        compactZOrders()
+        setZOrder(zOrderCounter + 1, for: id)
+        compactZOrders()
         needsDisplay = true; onChange?()
     }
 
-    @objc private func menuDeleteText(_ item: NSMenuItem) {
+    @objc private func menuSendToBack(_ item: NSMenuItem) {
         guard let id = item.representedObject as? UUID else { return }
+        compactZOrders()
+        setZOrder(0, for: id)
+        compactZOrders()
+        needsDisplay = true; onChange?()
+    }
+
+    @objc private func menuBringForward(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID,
+              let currentZ = zOrder(for: id) else { return }
+        // Find the next item above and swap z-orders.
+        let sorted = allZOrders()
+        if let next = sorted.first(where: { $0.z > currentZ }) {
+            setZOrder(next.z, for: id)
+            setZOrder(currentZ, for: next.id)
+        }
+        needsDisplay = true; onChange?()
+    }
+
+    @objc private func menuSendBackward(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID,
+              let currentZ = zOrder(for: id) else { return }
+        // Find the next item below and swap z-orders.
+        let sorted = allZOrders()
+        if let prev = sorted.last(where: { $0.z < currentZ }) {
+            setZOrder(prev.z, for: id)
+            setZOrder(currentZ, for: prev.id)
+        }
+        needsDisplay = true; onChange?()
+    }
+
+    @objc private func menuDeleteAny(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID else { return }
+        arrows.removeAll          { $0.id == id }
         textAnnotations.removeAll { $0.id == id }
-        if selectedTextID == id { selectedTextID = nil }
-        needsDisplay = true; onChange?()
-    }
-
-    @objc private func menuDeleteShape(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID else { return }
-        shapes.removeAll { $0.id == id }
+        shapes.removeAll          { $0.id == id }
+        if selectedArrowID == id { selectedArrowID = nil }
+        if selectedTextID  == id { selectedTextID  = nil }
         if selectedShapeID == id { selectedShapeID = nil }
         needsDisplay = true; onChange?()
     }
@@ -738,49 +891,48 @@ class AnnotationOverlay: NSView {
     // MARK: - Hit testing
 
     private func tailIndex(near point: CGPoint) -> Int? {
-        arrows.indices.reversed().first { i in
-            hypot(point.x - toView(arrows[i].start).x,
-                  point.y - toView(arrows[i].start).y) < 12
-        }
+        // Return the topmost (highest zOrder) matching arrow.
+        arrows.indices
+            .filter { hypot(point.x - toView(arrows[$0].start).x,
+                            point.y - toView(arrows[$0].start).y) < 12 }
+            .max(by: { arrows[$0].zOrder < arrows[$1].zOrder })
     }
 
     private func arrowBodyIndex(near point: CGPoint) -> Int? {
-        arrows.indices.reversed().first { i in
-            distToSeg(point, toView(arrows[i].start), toView(arrows[i].end))
-                < max(arrows[i].weight / 2 + 8, 12.0)
-        }
+        arrows.indices
+            .filter { distToSeg(point, toView(arrows[$0].start), toView(arrows[$0].end))
+                        < max(arrows[$0].weight / 2 + 8, 12.0) }
+            .max(by: { arrows[$0].zOrder < arrows[$1].zOrder })
     }
 
     private func textIndex(near point: CGPoint) -> Int? {
-        textAnnotations.indices.reversed().first { i in
-            let ann = textAnnotations[i]
-            guard ann.id != editingID else { return false }
-            let pt   = toView(ann.position)
-            let font = NSFont(name: ann.fontName, size: ann.fontSize) ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
-            let sz: CGSize
-            if ann.content.isEmpty {
-                // Empty annotation: use a fixed placeholder size so it's clickable.
-                sz = CGSize(width: max(80, ann.fontSize * 4), height: ann.fontSize * 1.4)
-            } else {
-                sz = NSAttributedString(string: ann.content, attributes: [.font: font]).size()
+        textAnnotations.indices
+            .filter { i in
+                let ann = textAnnotations[i]
+                guard ann.id != editingID else { return false }
+                let pt   = toView(ann.position)
+                let font = NSFont(name: ann.fontName, size: ann.fontSize)
+                    ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
+                let sz: CGSize = ann.content.isEmpty
+                    ? CGSize(width: max(80, ann.fontSize * 4), height: ann.fontSize * 1.4)
+                    : NSAttributedString(string: ann.content, attributes: [.font: font]).size()
+                let rect = CGRect(x: pt.x - 6, y: pt.y - abs(font.descender) - 4,
+                                  width: sz.width + 12, height: sz.height + 8)
+                return rect.contains(point)
             }
-            let rect = CGRect(x: pt.x - 6,
-                              y: pt.y - abs(font.descender) - 4,
-                              width: sz.width + 12,
-                              height: sz.height + 8)
-            return rect.contains(point)
-        }
+            .max(by: { textAnnotations[$0].zOrder < textAnnotations[$1].zOrder })
     }
 
     private func shapeIndex(near point: CGPoint) -> Int? {
-        shapes.indices.reversed().first { i in
-            let shape = shapes[i]
-            let viewRect = toView(shape.rect.origin)
-            let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
-                                 height: shape.rect.height * imageDisplayRect.height)
-            let viewRectFinal = CGRect(origin: viewRect, size: viewSize)
-            return viewRectFinal.contains(point)
-        }
+        shapes.indices
+            .filter { i in
+                let shape = shapes[i]
+                let viewRect = toView(shape.rect.origin)
+                let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
+                                     height: shape.rect.height * imageDisplayRect.height)
+                return CGRect(origin: viewRect, size: viewSize).contains(point)
+            }
+            .max(by: { shapes[$0].zOrder < shapes[$1].zOrder })
     }
 
     private func distToSeg(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {

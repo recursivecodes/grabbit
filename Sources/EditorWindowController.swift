@@ -43,6 +43,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var sidebar:         TabbedEditorSidebar!
     private var arrowToolButton: NSButton!
     private var textToolButton:  NSButton!
+    private var shapeToolButton: NSButton!
     private var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
     private var cropToolButton:  NSButton!
@@ -373,7 +374,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
         // ── IUO assignments ──────────────────────────────────────────────────────
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
-        arrowToolButton = arrowBtn;  textToolButton = textBtn
+        arrowToolButton = arrowBtn;  textToolButton = textBtn;  shapeToolButton = shapeBtn
         zoomScroll = zs;  zoomLabel = zl
         cropToolButton = cropBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
@@ -457,6 +458,31 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         }
         annotationOverlay.onCopy   = { [weak self] in self?.copyToClipboard() }
         annotationOverlay.onChange = { [weak self] in self?.refreshForExport() }
+        annotationOverlay.onActivateTool = { [weak self] tool in
+            guard let self else { return }
+            // Deselect all toolbar buttons first, then activate the right one.
+            self.arrowToolButton.state = .off
+            self.textToolButton.state  = .off
+            self.shapeToolButton.state = .off
+            switch tool {
+            case .arrow:
+                self.arrowToolButton.state = .on
+                self.toolMode = .arrow
+                self.annotationOverlay.activeTool = .arrow
+            case .text:
+                self.textToolButton.state = .on
+                self.toolMode = .text
+                self.annotationOverlay.activeTool = .text
+            case .shape:
+                self.shapeToolButton.state = .on
+                self.toolMode = .shape
+                self.annotationOverlay.activeTool = .shape
+            case .none:
+                break
+            }
+            self.sidebar.setToolMode(self.toolMode)
+            self.window?.makeFirstResponder(self.annotationOverlay)
+        }
 
         // ── Crop overlay wiring ──────────────────────────────────────────────────
         co.onCropConfirmed = { [weak self] normRect in
