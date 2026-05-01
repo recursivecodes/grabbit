@@ -56,6 +56,7 @@ extension EditorWindowController {
     func rendered() -> NSImage {
         var img = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
         img = withBlurRegions(img)
+        img = withHighlights(img)
         img = withArrows(img)
         img = withTexts(img)
         img = withShapes(img)
@@ -221,5 +222,27 @@ extension EditorWindowController {
                          imageSize: CGSize) -> CIImage? {
         return blurFilter(ciImage: ciImage, pixelRect: pixelRect,
                           style: style, intensity: intensity, imageSize: imageSize)
+    }
+
+    // MARK: - Highlights
+
+    func withHighlights(_ base: NSImage) -> NSImage {
+        let hs = annotationOverlay.highlights
+        guard !hs.isEmpty else { return base }
+        let out = NSImage(size: base.size)
+        out.lockFocus()
+        base.draw(in: NSRect(origin: .zero, size: base.size))
+        for h in hs.sorted(by: { $0.zOrder < $1.zOrder }) {
+            let origin = CGPoint(x: h.rect.origin.x * base.size.width,
+                                 y: h.rect.origin.y * base.size.height)
+            let size   = CGSize(width:  h.rect.size.width  * base.size.width,
+                                height: h.rect.size.height * base.size.height)
+            let rect   = CGRect(origin: origin, size: size).standardized
+            let clampedOpacity = min(max(h.opacity, 0.05), 0.85)
+            h.color.withAlphaComponent(clampedOpacity).setFill()
+            NSBezierPath(rect: rect).fill()
+        }
+        out.unlockFocus()
+        return out
     }
 }

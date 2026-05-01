@@ -38,6 +38,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     var shapeBorderColor: NSColor = .black
     var shapeFillColor:   NSColor = .clear
 
+    // Highlight state
+    var highlightColor:   NSColor  = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
+    var highlightOpacity: CGFloat  = 0.4
+
     // MARK: Views
 
     var captureView:             NSImageView!
@@ -48,6 +52,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var textToolButton:  NSButton!
     private var shapeToolButton: NSButton!
     private var blurToolButton:  NSButton!
+    private var highlightToolButton: NSButton!
     private var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
     private var cropToolButton:  NSButton!
@@ -76,6 +81,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var shapeFillColorWell:      NSColorWell!
     private var blurIntensitySlider:     NSSlider!;   private var blurIntensityLabel: NSTextField!
     private var blurStylePopup:          NSPopUpButton!
+    private var highlightColorWell:      NSColorWell!
+    private var highlightOpacitySlider:  NSSlider!;   private var highlightOpacityLabel: NSTextField!
 
     // MARK: - Show
 
@@ -232,10 +239,12 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let shapeBtn = makeToolButton("Shape")
         let cropBtn  = makeToolButton("Crop")
         let blurBtn  = makeToolButton("Blur")
-        cropBtn.toolTip = "Crop image"
-        blurBtn.toolTip = "Blur / pixelate a region"
+        let highlightBtn = makeToolButton("Highlight")
+        cropBtn.toolTip      = "Crop image"
+        blurBtn.toolTip      = "Blur / pixelate a region"
+        highlightBtn.toolTip = "Highlight a region"
 
-        let toolsStack = NSStackView(views: [cropBtn, arrowBtn, textBtn, shapeBtn, blurBtn])
+        let toolsStack = NSStackView(views: [cropBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -373,6 +382,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         blurStylePopupLocal.addItem(withTitle: "Pixelate")
         blurStylePopupLocal.selectItem(at: 0)
 
+        // Highlight property controls
+        let highlightColorWellLocal = well(highlightColor)
+        let highlightOpacitySliderLocal = sld(5, 85, Double(highlightOpacity * 100))
+        let highlightOpacityLabelLocal  = vlbl("\(Int(highlightOpacity * 100))%")
+
         let sb = TabbedEditorSidebar(
             arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell,
             textFontPopup: tfPopup,
@@ -385,7 +399,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             shapeBorderColorWell: shapeBorderWell,
             shapeFillColorWell: shapeFillWell,
             blurIntensitySlider: blurIntensitySliderLocal, blurIntensityLabel: blurIntensityLabelLocal,
-            blurStylePopup: blurStylePopupLocal
+            blurStylePopup: blurStylePopupLocal,
+            highlightColorWell: highlightColorWellLocal,
+            highlightOpacitySlider: highlightOpacitySliderLocal, highlightOpacityLabel: highlightOpacityLabelLocal
         )
         sb.translatesAutoresizingMaskIntoConstraints = false
         sb.addEffectSection("BORDER", toggle: bToggle)
@@ -416,7 +432,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         // ── IUO assignments ──────────────────────────────────────────────────────
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
         arrowToolButton = arrowBtn;  textToolButton = textBtn;  shapeToolButton = shapeBtn
-        blurToolButton = blurBtn
+        blurToolButton = blurBtn;  highlightToolButton = highlightBtn
         zoomScroll = zs;  zoomLabel = zl
         cropToolButton = cropBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
@@ -436,6 +452,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         shapeFillColorWell = shapeFillWell
         blurIntensitySlider = blurIntensitySliderLocal; blurIntensityLabel = blurIntensityLabelLocal
         blurStylePopup = blurStylePopupLocal
+        highlightColorWell = highlightColorWellLocal
+        highlightOpacitySlider = highlightOpacitySliderLocal; highlightOpacityLabel = highlightOpacityLabelLocal
 
         super.init(window: win)
         win.delegate = self
@@ -446,6 +464,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         shapeBtn.target             = self; shapeBtn.action             = #selector(toggleShapeTool(_:))
         cropBtn.target              = self; cropBtn.action              = #selector(toggleCropTool(_:))
         blurBtn.target              = self; blurBtn.action              = #selector(toggleBlurTool(_:))
+        highlightBtn.target         = self; highlightBtn.action         = #selector(toggleHighlightTool(_:))
         zoomInBtn.target            = self; zoomInBtn.action            = #selector(zoomIn)
         zoomOutBtn.target           = self; zoomOutBtn.action           = #selector(zoomOut)
         borderToggle.target         = self; borderToggle.action         = #selector(borderToggleChanged(_:))
@@ -472,6 +491,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         blurIntensitySlider.action = #selector(blurIntensityChanged(_:))
         blurStylePopup.target = self
         blurStylePopup.action = #selector(blurStyleChanged(_:))
+        highlightColorWell.target = self
+        highlightColorWell.action = #selector(colorPanelChanged)
+        highlightOpacitySlider.target = self
+        highlightOpacitySlider.action = #selector(highlightOpacityChanged(_:))
 
         (zoomScroll as? ZoomableScrollView)?.onMagnificationChanged = { [weak self] in
             self?.updateZoomLabel()
@@ -496,6 +519,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         annotationOverlay.currentBorderWeight  = shapeBorderWeight
         annotationOverlay.currentBorderColor   = shapeBorderColor
         annotationOverlay.currentFillColor     = shapeFillColor
+        annotationOverlay.currentHighlightColor   = highlightColor
+        annotationOverlay.currentHighlightOpacity = highlightOpacity
 
         annotationOverlay.imageDisplayRectProvider = { [weak self] in
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
@@ -513,10 +538,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         annotationOverlay.onActivateTool = { [weak self] tool in
             guard let self else { return }
             // Deselect all toolbar buttons first, then activate the right one.
-            self.arrowToolButton.state = .off
-            self.textToolButton.state  = .off
-            self.shapeToolButton.state = .off
-            self.blurToolButton.state  = .off
+            self.arrowToolButton.state     = .off
+            self.textToolButton.state      = .off
+            self.shapeToolButton.state     = .off
+            self.blurToolButton.state      = .off
+            self.highlightToolButton.state = .off
             switch tool {
             case .arrow:
                 self.arrowToolButton.state = .on
@@ -534,6 +560,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
                 self.blurToolButton.state = .on
                 self.toolMode = .blur
                 self.annotationOverlay.activeTool = .blur
+            case .highlight:
+                self.highlightToolButton.state = .on
+                self.toolMode = .highlight
+                self.annotationOverlay.activeTool = .highlight
             case .none:
                 break
             }
@@ -653,6 +683,22 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             textToolButton.state   = .off
             shapeToolButton.state  = .off
             annotationOverlay.activeTool = .blur
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            toolMode = .none
+            annotationOverlay.activeTool = .none
+        }
+        sidebar.setToolMode(toolMode)
+    }
+
+    @objc private func toggleHighlightTool(_ sender: NSButton) {
+        if sender.state == .on {
+            toolMode = .highlight
+            arrowToolButton.state  = .off
+            textToolButton.state   = .off
+            shapeToolButton.state  = .off
+            blurToolButton.state   = .off
+            annotationOverlay.activeTool = .highlight
             window?.makeFirstResponder(annotationOverlay)
         } else {
             toolMode = .none
@@ -864,6 +910,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         annotationOverlay.needsDisplay = true
     }
 
+    @objc private func highlightOpacityChanged(_ s: NSSlider) {
+        highlightOpacity = CGFloat(s.doubleValue) / 100
+        highlightOpacityLabel.stringValue = fmtPct(highlightOpacity)
+        annotationOverlay.currentHighlightOpacity = highlightOpacity
+        annotationOverlay.updateSelectedHighlight(opacity: highlightOpacity)
+        annotationOverlay.needsDisplay = true
+    }
+
     @objc private func colorPanelChanged() {
         if borderColorWell.isActive {
             borderColor = borderColorWell.color
@@ -893,6 +947,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             annotationOverlay.currentFillColor = shapeFillColor
             annotationOverlay.updateSelectedShape(fillColor: shapeFillColor)
             savePrefs()
+        } else if highlightColorWell.isActive {
+            highlightColor = highlightColorWell.color
+            annotationOverlay.currentHighlightColor = highlightColor
+            annotationOverlay.updateSelectedHighlight(color: highlightColor)
         }
         savePrefs()
     }
@@ -1004,11 +1062,12 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         cropOverlay.isHidden = true
         placeholderLabel.isHidden = false
         // Disable annotation and crop tools until an image is loaded.
-        arrowToolButton.isEnabled = false
-        textToolButton.isEnabled  = false
-        shapeToolButton.isEnabled = false
-        blurToolButton.isEnabled  = false
-        cropToolButton.isEnabled  = false
+        arrowToolButton.isEnabled     = false
+        textToolButton.isEnabled      = false
+        shapeToolButton.isEnabled     = false
+        blurToolButton.isEnabled      = false
+        highlightToolButton.isEnabled = false
+        cropToolButton.isEnabled      = false
     }
 
     /// Replace the current image (used by "Open…" and "New from Clipboard").
@@ -1060,13 +1119,15 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         annotationOverlay.textAnnotations.removeAll()
         annotationOverlay.shapes.removeAll()
         annotationOverlay.blurRegions.removeAll()
+        annotationOverlay.highlights.removeAll()
         annotationOverlay.isHidden = false
         placeholderLabel.isHidden = true
-        arrowToolButton.isEnabled = true
-        textToolButton.isEnabled  = true
-        shapeToolButton.isEnabled = true
-        blurToolButton.isEnabled  = true
-        cropToolButton.isEnabled  = true
+        arrowToolButton.isEnabled     = true
+        textToolButton.isEnabled      = true
+        shapeToolButton.isEnabled     = true
+        blurToolButton.isEnabled      = true
+        highlightToolButton.isEnabled = true
+        cropToolButton.isEnabled      = true
         refreshBaseImage()
         refreshShadow()
     }

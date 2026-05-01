@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Tool
 
-enum AnnotationTool { case none, arrow, text, shape, blur }
+enum AnnotationTool { case none, arrow, text, shape, blur, highlight }
 
 // MARK: - ShapeType
 
@@ -34,6 +34,16 @@ struct BlurRegion {
     var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
     var intensity: CGFloat // 0-100
     var style: BlurStyle
+}
+
+// MARK: - Highlight
+
+struct Highlight {
+    var id = UUID()
+    var zOrder: Int = 0
+    var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
+    var color: NSColor    // the highlight tint (alpha is ignored; use opacity instead)
+    var opacity: CGFloat  // 0-1, always < 1 so the highlight is never fully opaque
 }
 
 // MARK: - Arrow
@@ -108,6 +118,11 @@ class AnnotationOverlay: NSView {
     var currentBlurIntensity: CGFloat = 80
     var currentBlurStyle: BlurStyle = .blur
 
+    // MARK: Highlight state
+    var highlights: [Highlight] = []
+    var currentHighlightColor:   NSColor  = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
+    var currentHighlightOpacity: CGFloat  = 0.4
+
     // MARK: Z-order counter — incremented each time a new annotation is added.
     private var zOrderCounter: Int = 0
     private func nextZOrder() -> Int { zOrderCounter += 1; return zOrderCounter }
@@ -116,10 +131,11 @@ class AnnotationOverlay: NSView {
     var activeTool: AnnotationTool = .none {
         didSet {
             window?.invalidateCursorRects(for: self)
-            if activeTool != .arrow { selectedArrowID = nil }
-            if activeTool != .text  { finalizeEditing(); selectedTextID = nil }
-            if activeTool != .shape { finalizeShape(); selectedShapeID = nil }
-            if activeTool != .blur  { selectedBlurID = nil }
+            if activeTool != .arrow     { selectedArrowID = nil }
+            if activeTool != .text      { finalizeEditing(); selectedTextID = nil }
+            if activeTool != .shape     { finalizeShape(); selectedShapeID = nil }
+            if activeTool != .blur      { selectedBlurID = nil }
+            if activeTool != .highlight { selectedHighlightID = nil }
             needsDisplay = true
         }
     }
@@ -151,6 +167,7 @@ class AnnotationOverlay: NSView {
     }
     private var selectedShapeID: UUID?
     private var selectedBlurID:  UUID?
+    private var selectedHighlightID: UUID?
 
     private enum DragState {
         case none
@@ -164,6 +181,9 @@ class AnnotationOverlay: NSView {
         case newBlur(start: CGPoint, current: CGPoint)
         case movingBlurWhole(index: Int, lastLoc: CGPoint)
         case resizingBlur(index: Int, start: CGPoint, originalRect: CGRect)
+        case newHighlight(start: CGPoint, current: CGPoint)
+        case movingHighlightWhole(index: Int, lastLoc: CGPoint)
+        case resizingHighlight(index: Int, start: CGPoint, originalRect: CGRect)
     }
     private var dragState: DragState = .none
 
@@ -219,6 +239,12 @@ class AnnotationOverlay: NSView {
                 self.drawBlurRegion(r, selected: self.selectedBlurID == r.id)
             })
         }
+        for highlight in highlights {
+            let h = highlight
+            items.append(DrawItem(zOrder: h.zOrder) {
+                self.drawHighlight(h, selected: self.selectedHighlightID == h.id)
+            })
+        }
 
         items.sorted { $0.zOrder < $1.zOrder }.forEach { $0.draw() }
 
@@ -237,6 +263,11 @@ class AnnotationOverlay: NSView {
             var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
             rect = rect.standardized
             drawBlurRegionBorder(rect, selected: false)
+        }
+        if case .newHighlight(let s, let c) = dragState {
+            var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
+            rect = rect.standardized
+            drawHighlightRect(rect, color: currentHighlightColor, opacity: currentHighlightOpacity, selected: false)
         }
     }
 
@@ -447,16 +478,48 @@ class AnnotationOverlay: NSView {
         path.stroke()
     }
 
+    private func drawHighlight(_ highlight: Highlight, selected: Bool) {
+        let viewOrigin = toView(highlight.rect.origin)
+        let viewSize = CGSize(width: highlight.rect.width * imageDisplayRect.width,
+                              height: highlight.rect.height * imageDisplayRect.height)
+        let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
+        drawHighlightRect(viewRect, color: highlight.color, opacity: highlight.opacity, selected: selected)
+        if selected {
+            let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
+            drawShapeResizeHandleBottomRight(at: br)
+        }
+    }
+
+    private func drawHighlightRect(_ rect: CGRect, color: NSColor, opacity: CGFloat, selected: Bool) {
+        // Clamp opacity so the highlight is never fully opaque.
+        let clampedOpacity = min(max(opacity, 0.05), 0.85)
+        let fillColor = color.withAlphaComponent(clampedOpacity)
+        let path = NSBezierPath(rect: rect)
+        fillColor.setFill()
+        path.fill()
+
+        if selected {
+            let selRect = CGRect(x: rect.origin.x - 4, y: rect.origin.y - 4,
+                                width: rect.width + 8, height: rect.height + 8)
+            let selPath = NSBezierPath(rect: selRect)
+            selPath.lineWidth = 1.5
+            NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
+            selPath.setLineDash([5, 3], count: 2, phase: 0)
+            selPath.stroke()
+        }
+    }
+
     // MARK: - Cursor
 
     override func resetCursorRects() {
         let cursor: NSCursor
         switch activeTool {
-        case .arrow: cursor = .crosshair
-        case .text:  cursor = .iBeam
-        case .shape: cursor = .crosshair
-        case .blur:  cursor = .crosshair
-        case .none:  cursor = .arrow
+        case .arrow:     cursor = .crosshair
+        case .text:      cursor = .iBeam
+        case .shape:     cursor = .crosshair
+        case .blur:      cursor = .crosshair
+        case .highlight: cursor = .crosshair
+        case .none:      cursor = .arrow
         }
         addCursorRect(bounds, cursor: cursor)
     }
@@ -467,9 +530,10 @@ class AnnotationOverlay: NSView {
     // regardless of which tool is currently active.
     private func hitTestAny(at loc: CGPoint) -> (AnnotationTool, Int)? {
         if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) { return (.arrow, idx) }
-        if let idx = textIndex(near: loc)  { return (.text,  idx) }
-        if let idx = shapeIndex(near: loc) { return (.shape, idx) }
-        if let idx = blurIndex(near: loc)  { return (.blur,  idx) }
+        if let idx = textIndex(near: loc)      { return (.text,      idx) }
+        if let idx = shapeIndex(near: loc)     { return (.shape,     idx) }
+        if let idx = blurIndex(near: loc)      { return (.blur,      idx) }
+        if let idx = highlightIndex(near: loc) { return (.highlight, idx) }
         return nil
     }
 
@@ -477,11 +541,12 @@ class AnnotationOverlay: NSView {
     // tool differs from the current one.
     private func selectAnnotation(tool: AnnotationTool, index idx: Int) {
         switch tool {
-        case .arrow: selectedArrowID = arrows[idx].id
-        case .text:  selectedTextID  = textAnnotations[idx].id
-        case .shape: selectedShapeID = shapes[idx].id
-        case .blur:  selectedBlurID  = blurRegions[idx].id
-        case .none:  break
+        case .arrow:     selectedArrowID     = arrows[idx].id
+        case .text:      selectedTextID      = textAnnotations[idx].id
+        case .shape:     selectedShapeID     = shapes[idx].id
+        case .blur:      selectedBlurID      = blurRegions[idx].id
+        case .highlight: selectedHighlightID = highlights[idx].id
+        case .none:      break
         }
         if tool != activeTool {
             onActivateTool?(tool)
@@ -603,6 +668,35 @@ class AnnotationOverlay: NSView {
                 needsDisplay = true
             }
 
+        case .highlight:
+            // Check resize handle of selected highlight first.
+            if let selID = selectedHighlightID,
+               let selIdx = highlights.firstIndex(where: { $0.id == selID }) {
+                let h = highlights[selIdx]
+                let viewOrigin = toView(h.rect.origin)
+                let viewSize = CGSize(width: h.rect.width * imageDisplayRect.width,
+                                     height: h.rect.height * imageDisplayRect.height)
+                let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
+                let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
+                let handleRect = CGRect(x: br.x - 7, y: br.y - 7, width: 14, height: 14)
+                if handleRect.contains(loc) {
+                    dragState = .resizingHighlight(index: selIdx, start: loc, originalRect: h.rect)
+                    needsDisplay = true
+                    break
+                }
+            }
+            if let idx = highlightIndex(near: loc) {
+                selectedHighlightID = highlights[idx].id
+                dragState = .movingHighlightWhole(index: idx, lastLoc: loc)
+                needsDisplay = true
+            } else if let (tool, idx) = hitTestAny(at: loc), tool != .highlight {
+                selectAnnotation(tool: tool, index: idx)
+            } else {
+                dragState = .newHighlight(start: loc, current: loc)
+                selectedHighlightID = nil
+                needsDisplay = true
+            }
+
         case .none:
             // No tool active — clicking any annotation activates its tool.
             if let (tool, idx) = hitTestAny(at: loc) {
@@ -675,6 +769,28 @@ class AnnotationOverlay: NSView {
             newRect.size.height = max(0.02, origRect.height - dy)
             blurRegions[idx].rect = newRect
             needsDisplay = true
+        case .movingHighlightWhole(let idx, let last):
+            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
+            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
+            highlights[idx].rect.origin.x += d.x
+            highlights[idx].rect.origin.y += d.y
+            dragState = .movingHighlightWhole(index: idx, lastLoc: loc); needsDisplay = true
+        case .newHighlight(let s, _):
+            dragState = .newHighlight(start: s, current: loc); needsDisplay = true
+        case .resizingHighlight(let idx, _, let origRect):
+            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
+            let origViewRect = CGRect(
+                origin: toView(origRect.origin),
+                size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
+            ).standardized
+            let origBR = CGPoint(x: origViewRect.maxX, y: origViewRect.minY)
+            let dx = (loc.x - origBR.x) / r.width
+            let dy = (loc.y - origBR.y) / r.height
+            var newRect = origRect
+            newRect.size.width  = max(0.02, origRect.width  + dx)
+            newRect.size.height = max(0.02, origRect.height - dy)
+            highlights[idx].rect = newRect
+            needsDisplay = true
         case .none: break
         }
     }
@@ -728,8 +844,26 @@ class AnnotationOverlay: NSView {
             } else {
                 selectedBlurID = nil
             }
+        case .newHighlight(let s, let c):
+            let size = CGSize(width: c.x - s.x, height: c.y - s.y)
+            if abs(size.width) > 8 || abs(size.height) > 8 {
+                var rect = CGRect(origin: s, size: size)
+                rect = rect.standardized
+                let normOrigin = toNorm(rect.origin)
+                let normRect = CGRect(x: normOrigin.x,
+                                     y: normOrigin.y,
+                                     width: rect.size.width / imageDisplayRect.width,
+                                     height: rect.size.height / imageDisplayRect.height)
+                var h = Highlight(rect: normRect,
+                                  color: currentHighlightColor,
+                                  opacity: currentHighlightOpacity)
+                h.zOrder = nextZOrder()
+                highlights.append(h); selectedHighlightID = h.id; onChange?()
+            } else {
+                selectedHighlightID = nil
+            }
         case .movingArrowTail, .movingArrowWhole, .movingText, .movingShapeWhole, .resizingShape,
-             .movingBlurWhole, .resizingBlur:
+             .movingBlurWhole, .resizingBlur, .movingHighlightWhole, .resizingHighlight:
             onChange?()
         case .none: break
         }
@@ -863,6 +997,10 @@ class AnnotationOverlay: NSView {
             blurRegions.removeAll { $0.id == id }
             selectedBlurID = nil
             needsDisplay = true; onChange?()
+        } else if activeTool == .highlight, let id = selectedHighlightID {
+            highlights.removeAll { $0.id == id }
+            selectedHighlightID = nil
+            needsDisplay = true; onChange?()
         } else {
             super.keyDown(with: event)
         }
@@ -880,6 +1018,7 @@ class AnnotationOverlay: NSView {
             case text(UUID)
             case shape(UUID)
             case blur(UUID)
+            case highlight(UUID)
         }
         var hit: HitItem?
         if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) {
@@ -890,16 +1029,19 @@ class AnnotationOverlay: NSView {
             hit = .shape(shapes[idx].id)
         } else if let idx = blurIndex(near: loc) {
             hit = .blur(blurRegions[idx].id)
+        } else if let idx = highlightIndex(near: loc) {
+            hit = .highlight(highlights[idx].id)
         }
 
         if let hit {
             let id: UUID
             let deleteTitle: String
             switch hit {
-            case .arrow(let u):  id = u; deleteTitle = "Delete Arrow"
-            case .text(let u):   id = u; deleteTitle = "Delete Text"
-            case .shape(let u):  id = u; deleteTitle = "Delete Shape"
-            case .blur(let u):   id = u; deleteTitle = "Delete Blur"
+            case .arrow(let u):     id = u; deleteTitle = "Delete Arrow"
+            case .text(let u):      id = u; deleteTitle = "Delete Text"
+            case .shape(let u):     id = u; deleteTitle = "Delete Shape"
+            case .blur(let u):      id = u; deleteTitle = "Delete Blur"
+            case .highlight(let u): id = u; deleteTitle = "Delete Highlight"
             }
 
             // Layering submenu
@@ -936,6 +1078,7 @@ class AnnotationOverlay: NSView {
         if let t = textAnnotations.first(where: { $0.id == id })   { return t.zOrder }
         if let s = shapes.first(where: { $0.id == id })            { return s.zOrder }
         if let b = blurRegions.first(where: { $0.id == id })       { return b.zOrder }
+        if let h = highlights.first(where: { $0.id == id })        { return h.zOrder }
         return nil
     }
 
@@ -944,6 +1087,7 @@ class AnnotationOverlay: NSView {
         if let i = textAnnotations.firstIndex(where: { $0.id == id }) { textAnnotations[i].zOrder = z }
         if let i = shapes.firstIndex(where: { $0.id == id })          { shapes[i].zOrder = z }
         if let i = blurRegions.firstIndex(where: { $0.id == id })     { blurRegions[i].zOrder = z }
+        if let i = highlights.firstIndex(where: { $0.id == id })      { highlights[i].zOrder = z }
     }
 
     private func allZOrders() -> [(id: UUID, z: Int)] {
@@ -952,6 +1096,7 @@ class AnnotationOverlay: NSView {
         textAnnotations.forEach { all.append(($0.id, $0.zOrder)) }
         shapes.forEach          { all.append(($0.id, $0.zOrder)) }
         blurRegions.forEach     { all.append(($0.id, $0.zOrder)) }
+        highlights.forEach      { all.append(($0.id, $0.zOrder)) }
         return all.sorted { $0.1 < $1.1 }
     }
 
@@ -1010,10 +1155,12 @@ class AnnotationOverlay: NSView {
         textAnnotations.removeAll { $0.id == id }
         shapes.removeAll          { $0.id == id }
         blurRegions.removeAll     { $0.id == id }
-        if selectedArrowID == id { selectedArrowID = nil }
-        if selectedTextID  == id { selectedTextID  = nil }
-        if selectedShapeID == id { selectedShapeID = nil }
-        if selectedBlurID  == id { selectedBlurID  = nil }
+        highlights.removeAll      { $0.id == id }
+        if selectedArrowID     == id { selectedArrowID     = nil }
+        if selectedTextID      == id { selectedTextID      = nil }
+        if selectedShapeID     == id { selectedShapeID     = nil }
+        if selectedBlurID      == id { selectedBlurID      = nil }
+        if selectedHighlightID == id { selectedHighlightID = nil }
         needsDisplay = true; onChange?()
     }
 
@@ -1081,6 +1228,16 @@ class AnnotationOverlay: NSView {
               let idx = blurRegions.firstIndex(where: { $0.id == id }) else { return }
         if let v = intensity { blurRegions[idx].intensity = v }
         if let v = style     { blurRegions[idx].style     = v }
+        needsDisplay = true; onChange?()
+    }
+
+    // MARK: - Update selected highlight
+
+    func updateSelectedHighlight(color: NSColor? = nil, opacity: CGFloat? = nil) {
+        guard let id = selectedHighlightID,
+              let idx = highlights.firstIndex(where: { $0.id == id }) else { return }
+        if let v = color   { highlights[idx].color   = v }
+        if let v = opacity { highlights[idx].opacity = v }
         needsDisplay = true; onChange?()
     }
 
@@ -1154,6 +1311,18 @@ class AnnotationOverlay: NSView {
                 return CGRect(origin: viewOrigin, size: viewSize).standardized.contains(point)
             }
             .max(by: { blurRegions[$0].zOrder < blurRegions[$1].zOrder })
+    }
+
+    private func highlightIndex(near point: CGPoint) -> Int? {
+        highlights.indices
+            .filter { i in
+                let h = highlights[i]
+                let viewOrigin = toView(h.rect.origin)
+                let viewSize = CGSize(width: h.rect.width * imageDisplayRect.width,
+                                     height: h.rect.height * imageDisplayRect.height)
+                return CGRect(origin: viewOrigin, size: viewSize).standardized.contains(point)
+            }
+            .max(by: { highlights[$0].zOrder < highlights[$1].zOrder })
     }
 
     private func distToSeg(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {

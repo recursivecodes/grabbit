@@ -13,6 +13,7 @@ class TabbedEditorSidebar: NSView {
     private var textPropViews:    [NSView] = []
     private var shapePropViews:   [NSView] = []
     private var blurPropViews:    [NSView] = []
+    private var highlightPropViews: [NSView] = []
 
     init(
         arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
@@ -26,7 +27,9 @@ class TabbedEditorSidebar: NSView {
         shapeBorderColorWell: NSColorWell,
         shapeFillColorWell: NSColorWell,
         blurIntensitySlider: NSSlider, blurIntensityLabel: NSTextField,
-        blurStylePopup: NSPopUpButton
+        blurStylePopup: NSPopUpButton,
+        highlightColorWell: NSColorWell,
+        highlightOpacitySlider: NSSlider, highlightOpacityLabel: NSTextField
     ) {
         tabControl = NSSegmentedControl(
             labels: ["Properties", "Effects"],
@@ -233,6 +236,22 @@ class TabbedEditorSidebar: NSView {
         propertiesStack.addArrangedSubview(blurIntensityRow)
         blurPropViews.append(blurIntensityRow)
 
+        // ── Properties: highlight tool section ───────────────────────────────────
+        let highlightHeader = makeSectionBox("HIGHLIGHT")
+        highlightHeader.isHidden = true
+        propertiesStack.addArrangedSubview(highlightHeader)
+        highlightPropViews.append(highlightHeader)
+
+        let highlightColorRow = makeSidebarRow("Color", highlightColorWell)
+        highlightColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(highlightColorRow)
+        highlightPropViews.append(highlightColorRow)
+
+        let highlightOpacityRow = makeSidebarRow("Opacity", highlightOpacitySlider, highlightOpacityLabel)
+        highlightOpacityRow.isHidden = true
+        propertiesStack.addArrangedSubview(highlightOpacityRow)
+        highlightPropViews.append(highlightOpacityRow)
+
         // Start showing Properties tab
         effectsScroll.isHidden = true
 
@@ -266,14 +285,16 @@ class TabbedEditorSidebar: NSView {
 
     func setToolMode(_ mode: ToolMode) {
         noToolView.isHidden = mode != .none
-        let isArrow = mode == .arrow
-        let isText  = mode == .text
-        let isShape = mode == .shape
-        let isBlur  = mode == .blur
-        arrowPropViews.forEach { $0.isHidden = !isArrow }
-        textPropViews.forEach  { $0.isHidden = !isText }
-        shapePropViews.forEach { $0.isHidden = !isShape }
-        blurPropViews.forEach  { $0.isHidden = !isBlur }
+        let isArrow     = mode == .arrow
+        let isText      = mode == .text
+        let isShape     = mode == .shape
+        let isBlur      = mode == .blur
+        let isHighlight = mode == .highlight
+        arrowPropViews.forEach     { $0.isHidden = !isArrow }
+        textPropViews.forEach      { $0.isHidden = !isText }
+        shapePropViews.forEach     { $0.isHidden = !isShape }
+        blurPropViews.forEach      { $0.isHidden = !isBlur }
+        highlightPropViews.forEach { $0.isHidden = !isHighlight }
         if mode != .none && tabControl.selectedSegment != 0 {
             tabControl.selectedSegment = 0
             propertiesScroll.isHidden = false
