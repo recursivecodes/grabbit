@@ -28,6 +28,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About Grabbit", action: #selector(openAbout), keyEquivalent: "")
+        appMenu.addItem(.separator())
         // Cmd+Q closes the front editor window but keeps Grabbit running in
         // the menu bar. To fully quit, use "Quit Grabbit" in the status bar menu.
         appMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "q")
@@ -76,6 +78,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         menu.addItem(withTitle: "Open Editor", action: #selector(openEditor), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "About Grabbit", action: #selector(openAbout), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
 
@@ -142,6 +146,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         } else {
             EditorWindowController.show(image: image)
         }
+    }
+
+    // MARK: - About
+
+    @objc private func openAbout() {
+        AboutWindowController.show()
     }
 
     // MARK: - Settings
