@@ -6,6 +6,12 @@
 
 ![macOS](https://img.shields.io/badge/macOS-13%2B-blue) ![Swift](https://img.shields.io/badge/Swift-5.9-orange)
 
+## Sponsor
+
+If you find this app helpful, please consider buying me a coffee ☕️❤️!
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/gbraad)
+
 ## Features
 
 - **Global hotkey capture** — press the shortcut (default ⌥⇧P) from any app to start a region screenshot
