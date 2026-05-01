@@ -155,9 +155,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         ol.wantsLayer = true
 
         // ── Zoom scroll view ─────────────────────────────────────────────────────
-        let zoomDoc = NSView()
-        zoomDoc.translatesAutoresizingMaskIntoConstraints = true
-        zoomDoc.autoresizingMask = [.width, .height]
+        // zoomDoc is the scroll view's document — it sizes itself to the image
+        // plus padding. The scroll view centers it when smaller than the viewport.
+        let zoomDoc = CenteredDocumentView()
+        zoomDoc.translatesAutoresizingMaskIntoConstraints = false
 
         zoomDoc.addSubview(iv)
         zoomDoc.addSubview(ol)
@@ -183,8 +184,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         zs.autohidesScrollers     = true
         zs.scrollerStyle          = .overlay
         zs.drawsBackground        = false
-        zs.documentView           = zoomDoc
         zs.translatesAutoresizingMaskIntoConstraints = false
+
+        // Use a centering clip view so the document is always centered in the
+        // viewport when it's smaller than the available space.
+        let centerClip = CenteringClipView()
+        centerClip.drawsBackground = false
+        zs.contentView = centerClip
+        zs.documentView = zoomDoc
 
         // ── Canvas ───────────────────────────────────────────────────────────────
         let cv = CanvasView()
@@ -617,12 +624,18 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func zoomIn() {
-        zoomScroll.magnification = min(8.0, zoomScroll.magnification * 1.25)
+        let newMag = min(8.0, zoomScroll.magnification * 1.25)
+        let center = CGPoint(x: zoomScroll.documentView!.frame.midX,
+                             y: zoomScroll.documentView!.frame.midY)
+        zoomScroll.setMagnification(newMag, centeredAt: center)
         updateZoomLabel()
     }
 
     @objc private func zoomOut() {
-        zoomScroll.magnification = max(0.1, zoomScroll.magnification / 1.25)
+        let newMag = max(0.1, zoomScroll.magnification / 1.25)
+        let center = CGPoint(x: zoomScroll.documentView!.frame.midX,
+                             y: zoomScroll.documentView!.frame.midY)
+        zoomScroll.setMagnification(newMag, centeredAt: center)
         updateZoomLabel()
     }
 

@@ -85,3 +85,41 @@ func vlbl(_ text: String) -> NSTextField {
 
 func fmt(_ v: CGFloat) -> String { "\(Int(v))" }
 func fmtPct(_ v: CGFloat) -> String { "\(Int(v * 100))%" }
+
+// MARK: - CenteringClipView
+// Centers the document view in the scroll view when the document is smaller
+// than the visible area. When the document is larger, normal scrolling applies.
+
+class CenteringClipView: NSClipView {
+    override var isFlipped: Bool { true }
+
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        guard let doc = documentView else { return rect }
+
+        let docSize = doc.frame.size
+        if docSize.width < proposedBounds.width {
+            rect.origin.x = floor((docSize.width - proposedBounds.width) / 2)
+        }
+        if docSize.height < proposedBounds.height {
+            rect.origin.y = floor((docSize.height - proposedBounds.height) / 2)
+        }
+        return rect
+    }
+}
+
+// MARK: - CenteredDocumentView
+// A document view that sizes itself via Auto Layout (intrinsic content size
+// driven by its subviews) rather than stretching to fill the clip view.
+
+class CenteredDocumentView: NSView {
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        // After layout, tell the scroll view the document size may have changed
+        // so it can recompute centering.
+        enclosingScrollView?.reflectScrolledClipView(
+            enclosingScrollView!.contentView)
+    }
+}
