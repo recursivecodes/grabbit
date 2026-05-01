@@ -62,6 +62,24 @@ open build/Grabbit.app
 
 The build script uses `swiftc` directly — no Xcode project or Swift Package Manager required.
 
+### Local code signing (recommended)
+
+Without a code signing certificate, macOS TCC will prompt you for Screen Recording permission on **every new build** because it tracks permission by binary identity, which changes each time you compile.
+
+To fix this, create a local self-signed certificate once. macOS will then recognise the same identity across all future builds and the permission prompt won't reappear.
+
+**One-time setup:**
+
+1. Open **Keychain Access** (Applications → Utilities → Keychain Access)
+2. From the menu: **Keychain Access → Certificate Assistant → Create a Certificate…**
+3. Fill in the fields:
+   - **Name:** `Grabbit Dev` (must match exactly)
+   - **Identity Type:** Self Signed Root
+   - **Certificate Type:** Code Signing
+4. Click **Create**, then **Done**
+
+That's it. The build script will automatically find and use the certificate on every subsequent build. Grant Screen Recording permission once after the first signed build and it will persist.
+
 ### Releasing
 
 Push a version tag to trigger the GitHub Actions workflow, which builds the app and publishes a release with `Grabbit.zip` attached:
