@@ -38,12 +38,12 @@ func drawRabbit(ctx: CGContext, size: CGFloat) {
     ctx.addPath(bgPath); ctx.clip()
 
     let cx = s * 0.5       // center x
-    let headY = s * 0.52   // center of head circle
+    let headY = s * 0.57   // center of head circle (shifted down to vertically center the figure)
 
     // ── Ears ──────────────────────────────────────────────────────────
     let earW: CGFloat = s * 0.14
     let earH: CGFloat = s * 0.32
-    let earY: CGFloat = s * 0.10
+    let earY: CGFloat = s * 0.15
     let earLX = cx - s * 0.14
     let earRX = cx + s * 0.14 - earW
 
