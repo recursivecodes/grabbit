@@ -68,7 +68,7 @@ class TabbedEditorSidebar: NSView {
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.97, alpha: 1).cgColor
+        updateSidebarBackground()
 
         let sep = NSBox()
         sep.boxType = .custom
@@ -222,6 +222,21 @@ class TabbedEditorSidebar: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: Appearance
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateSidebarBackground()
+    }
+
+    private func updateSidebarBackground() {
+        // Resolve the dynamic color in the current appearance so the CALayer
+        // (which doesn't track NSAppearance automatically) gets the right value.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            self.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
+    }
 
     // MARK: Tab switching
 

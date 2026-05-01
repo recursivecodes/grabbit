@@ -30,6 +30,12 @@ echo "Generating icon..."
 swift make_icon.swift "build/AppIcon.iconset"
 iconutil -c icns "build/AppIcon.iconset" -o "$BUNDLE/Contents/Resources/AppIcon.icns"
 
+echo "Signing..."
+# Ad-hoc sign the bundle so macOS TCC can track a stable identity across rebuilds.
+# Without this, every new binary is treated as a different app and screen-recording
+# permission has to be re-granted each time.
+codesign --force --deep --sign - "$BUNDLE"
+
 echo "Done: $BUNDLE"
 echo ""
 echo "Run with:  open $BUNDLE"

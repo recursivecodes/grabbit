@@ -36,7 +36,8 @@ class FlippedClipView: NSClipView {
 class CanvasView: NSView {
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedRed: 0.95, green: 0.95, blue: 0.93, alpha: 1).setFill()
+        // Use the standard system under-page background — adapts to light/dark mode automatically.
+        NSColor.underPageBackgroundColor.setFill()
         dirtyRect.fill()
     }
 }

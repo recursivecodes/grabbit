@@ -111,13 +111,22 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
         // ── Window ──────────────────────────────────────────────────────────────
         let screen = NSScreen.main ?? NSScreen.screens[0]
+        let visible = screen.visibleFrame
+
+        // Open at 70% of the visible screen, capped at 1400×900, and centered.
+        let w = min(visible.width  * 0.70, 1400)
+        let h = min(visible.height * 0.70,  900)
+        let x = visible.minX + (visible.width  - w) / 2
+        let y = visible.minY + (visible.height - h) / 2
+        let initialFrame = NSRect(x: x, y: y, width: w, height: h)
+
         let win = NSWindow(
-            contentRect: screen.visibleFrame,
+            contentRect: initialFrame,
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
         win.title = "Grabbit"
-        win.setFrame(screen.visibleFrame, display: false)
+        win.setFrame(initialFrame, display: false)
         win.minSize = NSSize(width: 600, height: 400)
 
         // ── Image view + overlay ─────────────────────────────────────────────────
@@ -200,13 +209,42 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         zoomStack.spacing = 4
         zoomStack.translatesAutoresizingMaskIntoConstraints = false
 
+        // ── Toolbar background strip ─────────────────────────────────────────────
+        // A plain NSVisualEffectView gives us the correct system material that
+        // adapts to both light and dark mode, keeping buttons legible in either.
+        let toolbarBg = NSVisualEffectView()
+        toolbarBg.material = .windowBackground
+        toolbarBg.blendingMode = .withinWindow
+        toolbarBg.state = .active
+        toolbarBg.translatesAutoresizingMaskIntoConstraints = false
+
+        // A 1-pt separator at the bottom of the toolbar strip
+        let toolbarSep = NSBox()
+        toolbarSep.boxType = .custom
+        toolbarSep.borderWidth = 0
+        toolbarSep.fillColor = NSColor.separatorColor
+        toolbarSep.cornerRadius = 0
+        toolbarSep.translatesAutoresizingMaskIntoConstraints = false
+
         let tbH: CGFloat = 44
+        cv.addSubview(toolbarBg)
+        cv.addSubview(toolbarSep)
         cv.addSubview(zs)
         cv.addSubview(toolsStack)
         cv.addSubview(zoomStack)
 
         NSLayoutConstraint.activate([
-            zs.topAnchor.constraint(equalTo: cv.topAnchor, constant: tbH),
+            toolbarBg.topAnchor.constraint(equalTo: cv.topAnchor),
+            toolbarBg.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            toolbarBg.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            toolbarBg.heightAnchor.constraint(equalToConstant: tbH),
+
+            toolbarSep.topAnchor.constraint(equalTo: toolbarBg.bottomAnchor),
+            toolbarSep.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            toolbarSep.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            toolbarSep.heightAnchor.constraint(equalToConstant: 1),
+
+            zs.topAnchor.constraint(equalTo: cv.topAnchor, constant: tbH + 1),
             zs.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
             zs.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
             zs.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
