@@ -2,8 +2,18 @@ import AppKit
 
 // Subclass so the borderless window can become key (required for keyboard events).
 private class OverlayWindow: NSWindow {
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey:  Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // Last-resort Escape handler at the window level, in case the overlay view
+    // somehow loses first responder and can't receive keyDown events.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // Escape
+            (contentView as? OverlayView)?.cancel()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
 }
 
 class OverlayWindowController: NSWindowController {
@@ -11,6 +21,11 @@ class OverlayWindowController: NSWindowController {
     private static var current: OverlayWindowController?
 
     static func show(screenshot: NSImage, screen: NSScreen) {
+        // Defensive: if a stale overlay somehow survived, tear it down first.
+        if let existing = current {
+            NSLog("Grabbit: tearing down stale overlay before showing new one")
+            existing.forceClose()
+        }
         let controller = OverlayWindowController(screenshot: screenshot, screen: screen)
         current = controller
         controller.showWindow(nil)
@@ -53,10 +68,20 @@ class OverlayWindowController: NSWindowController {
         window?.makeFirstResponder(overlayView)
     }
 
+    // Normal dismiss: cancel or post-capture.
     private func dismiss() {
-        NSCursor.pop()
+        // Restore the default arrow cursor before closing.
+        NSCursor.arrow.set()
         close()
         Self.current = nil
+        CaptureSession.captureDidEnd()
+    }
+
+    // Force-close used when tearing down a stale overlay.
+    private func forceClose() {
+        close()
+        Self.current = nil
+        // Don't call captureDidEnd here — the caller manages that.
     }
 
     private func finishCapture(viewRect: NSRect, screenshot: NSImage, screen: NSScreen) {
@@ -69,9 +94,14 @@ class OverlayWindowController: NSWindowController {
         )
 
         guard
-            let cgFull = screenshot.cgImage(forProposedRect: nil, context: nil, hints: nil),
+            let cgFull    = screenshot.cgImage(forProposedRect: nil, context: nil, hints: nil),
             let cgCropped = cgFull.cropping(to: pixelRect)
-        else { dismiss(); return }
+        else {
+            // Crop failed — dismiss cleanly so the app isn't stuck.
+            NSLog("Grabbit: crop failed, dismissing overlay")
+            dismiss()
+            return
+        }
 
         let cropped = NSImage(cgImage: cgCropped, size: viewRect.size)
 
@@ -86,12 +116,12 @@ class OverlayWindowController: NSWindowController {
 
 private class OverlayView: NSView {
     private let screenshot: NSImage
-    private var startPoint: NSPoint = .zero
+    private var startPoint:   NSPoint = .zero
     private var currentPoint: NSPoint = .zero
     private var isDragging = false
 
     var onSelection: ((NSRect) -> Void)?
-    var onCancel: (() -> Void)?
+    var onCancel:    (() -> Void)?
 
     // Flipped so y=0 is at the top, matching CGImage's coordinate layout.
     override var isFlipped: Bool { true }
@@ -100,19 +130,44 @@ private class OverlayView: NSView {
     init(screenshot: NSImage, frame: NSRect) {
         self.screenshot = screenshot
         super.init(frame: frame)
+        // Track mouse-entered/exited so we can set the cursor as soon as
+        // the pointer enters the overlay, before any click or drag.
+        let opts: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved,
+                                            .cursorUpdate, .activeAlways]
+        addTrackingArea(NSTrackingArea(rect: frame, options: opts, owner: self, userInfo: nil))
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    // MARK: Cursor — set it on every entry point so it's always a crosshair.
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.crosshair.set()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.crosshair.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.crosshair.set()
+    }
+
+    // Called by both keyDown and the window-level fallback.
+    func cancel() {
+        isDragging = false
+        onCancel?()
     }
 
     private var selectionRect: NSRect {
         NSRect(
             x: min(startPoint.x, currentPoint.x),
             y: min(startPoint.y, currentPoint.y),
-            width: abs(currentPoint.x - startPoint.x),
+            width:  abs(currentPoint.x - startPoint.x),
             height: abs(currentPoint.y - startPoint.y)
         )
     }
@@ -160,14 +215,14 @@ private class OverlayView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        startPoint = convert(event.locationInWindow, from: nil)
+        startPoint   = convert(event.locationInWindow, from: nil)
         currentPoint = startPoint
-        isDragging = false
+        isDragging   = false
     }
 
     override func mouseDragged(with event: NSEvent) {
         currentPoint = convert(event.locationInWindow, from: nil)
-        isDragging = true
+        isDragging   = true
         needsDisplay = true
     }
 
@@ -177,12 +232,15 @@ private class OverlayView: NSView {
         let rect = selectionRect
         if rect.width > 5 && rect.height > 5 {
             onSelection?(rect)
+        } else {
+            // Selection too small — reset silently, don't dismiss.
+            needsDisplay = true
         }
     }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { // Escape
-            onCancel?()
+            cancel()
         }
     }
 }

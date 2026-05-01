@@ -19,8 +19,44 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
+      - name: Import signing certificate
+        env:
+          P12_BASE64:  ${{ secrets.SIGNING_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          # Decode the .p12 from the secret
+          echo "$P12_BASE64" | base64 --decode -o /tmp/grabbit-dev.p12
+
+          # Create a short-lived keychain so the cert doesn't touch the login keychain
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" grabbit-build.keychain
+          security set-keychain-settings -lut 3600 grabbit-build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" grabbit-build.keychain
+
+          # Import the certificate
+          security import /tmp/grabbit-dev.p12 \
+            -k grabbit-build.keychain \
+            -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -f pkcs12
+
+          # Allow codesign to access the key without a UI prompt
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" grabbit-build.keychain
+
+          # Add to the search list so codesign can find it by name
+          security list-keychains -d user -s grabbit-build.keychain $(security list-keychains -d user | tr -d '"')
+
+          rm /tmp/grabbit-dev.p12
+
       - name: Build
         run: bash build.sh
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          security delete-keychain grabbit-build.keychain || true
 
       - name: Zip app bundle
         run: |

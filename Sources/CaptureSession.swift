@@ -3,7 +3,17 @@ import CoreGraphics
 import ScreenCaptureKit
 
 class CaptureSession {
+
+    // Prevents re-entrant captures (hotkey fired while overlay is already up,
+    // or while the async SCK capture is still in flight).
+    private static var isCapturing = false
+
     static func start() {
+        guard !isCapturing else {
+            NSLog("Grabbit: capture already in progress, ignoring hotkey")
+            return
+        }
+
         guard CGPreflightScreenCaptureAccess() else {
             let alert = NSAlert()
             alert.messageText = "Screen Recording Permission Required"
@@ -14,13 +24,19 @@ class CaptureSession {
 
         guard let screen = NSScreen.main else { return }
 
-        // Use ScreenCaptureKit on macOS 14+. The capture is async internally
-        // but we dispatch back to the main queue for the overlay presentation.
+        isCapturing = true
+
         if #available(macOS 14.0, *) {
             captureWithSCK(screen: screen)
         } else {
             fallbackCapture(screen: screen)
         }
+    }
+
+    // Called by OverlayWindowController when the overlay is fully dismissed,
+    // whether by a successful selection, a cancel, or an error.
+    static func captureDidEnd() {
+        isCapturing = false
     }
 
     // MARK: - ScreenCaptureKit path (macOS 14+)
@@ -29,24 +45,25 @@ class CaptureSession {
     private static func captureWithSCK(screen: NSScreen) {
         Task {
             do {
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else {
+                let content = try await SCShareableContent.excludingDesktopWindows(
+                    false, onScreenWindowsOnly: true)
+                guard let display = content.displays.first(
+                    where: { $0.displayID == CGMainDisplayID() })
+                else {
                     await MainActor.run { fallbackCapture(screen: screen) }
                     return
                 }
 
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let config = SCStreamConfiguration()
-                // Use pixel dimensions (points × backing scale) so the CGImage
-                // is full-resolution and matches what finishCapture expects when
-                // it multiplies the selection rect by backingScaleFactor.
                 let scale = screen.backingScaleFactor
                 config.width  = Int(Double(display.width)  * scale)
                 config.height = Int(Double(display.height) * scale)
                 config.scalesToFit = false
                 config.showsCursor = false
 
-                let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                let cgImage = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter, configuration: config)
                 let screenshot = NSImage(cgImage: cgImage, size: screen.frame.size)
 
                 await MainActor.run {
@@ -62,13 +79,8 @@ class CaptureSession {
     // MARK: - Fallback for macOS < 14
 
     private static func fallbackCapture(screen: NSScreen) {
-        // CGDisplayCreateImage is available pre-macOS 15.
-        let displayID = CGMainDisplayID()
-        let selector = NSSelectorFromString("CGDisplayCreateImage:")
-        _ = selector  // suppress unused warning
-
-        // Use a temporary file via screencapture as the universal fallback.
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("grabbit_cap.png")
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("grabbit_cap.png")
         let task = Process()
         task.launchPath = "/usr/sbin/screencapture"
         task.arguments = ["-x", "-t", "png", tmp.path]
@@ -77,6 +89,7 @@ class CaptureSession {
 
         guard let img = NSImage(contentsOf: tmp) else {
             NSLog("Grabbit: fallback screencapture failed")
+            captureDidEnd()   // unblock so the hotkey works next time
             return
         }
         try? FileManager.default.removeItem(at: tmp)

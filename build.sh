@@ -31,10 +31,20 @@ swift make_icon.swift "build/AppIcon.iconset"
 iconutil -c icns "build/AppIcon.iconset" -o "$BUNDLE/Contents/Resources/AppIcon.icns"
 
 echo "Signing..."
-# Ad-hoc sign the bundle so macOS TCC can track a stable identity across rebuilds.
-# Without this, every new binary is treated as a different app and screen-recording
-# permission has to be re-granted each time.
-codesign --force --deep --sign - "$BUNDLE"
+# Sign with a local "Grabbit Dev" certificate if available — this gives TCC
+# a stable TeamID+BundleID pair so screen-recording permission persists across
+# rebuilds. Create it once in Keychain Access → Certificate Assistant →
+# Create a Certificate (Name: "Grabbit Dev", Type: Code Signing, Self Signed Root).
+# Falls back to ad-hoc signing if the certificate isn't present.
+if security find-certificate -c "Grabbit Dev" ~/Library/Keychains/login.keychain-db &>/dev/null; then
+    codesign --force --deep --sign "Grabbit Dev" "$BUNDLE"
+    echo "Signed with 'Grabbit Dev' certificate"
+else
+    codesign --force --deep --sign - "$BUNDLE"
+    echo "Warning: 'Grabbit Dev' certificate not found, used ad-hoc signing."
+    echo "         TCC will not persist screen-recording permission across rebuilds."
+    echo "         See build.sh for instructions to create the certificate."
+fi
 
 echo "Done: $BUNDLE"
 echo ""
