@@ -8,17 +8,23 @@
 
 ## Features
 
-- **Global hotkey capture** — press the shortcut from any app to start a region screenshot
+- **Global hotkey capture** — press the shortcut (default ⌥⇧P) from any app to start a region screenshot
+- **Quick Capture** — a second hotkey (default ⌥P) captures a region and copies it straight to the clipboard without opening the editor; sends a system notification on copy
 - **Region selection** — drag to select any area of the screen on a full-screen overlay
+- **File menu** — Open… (⌘O), New from Clipboard (⌘N), Close Image (⌘W), Save (⌘S), and Save As… (⌘⇧S); supports PNG, JPEG, TIFF, BMP, GIF, HEIC, and WebP
 - **Annotation tools**
-  - Arrows — draw, move, resize the tail, delete
-  - Text — click to place, double-click to edit inline, configurable font/size/color/outline
+  - Arrows — click-drag to draw; drag the tail handle to reposition; drag the body to move
+  - Text — click to place, double-click to edit inline; configurable font, size, color, and outline
   - Shapes — rectangle, circle, rounded rectangle with configurable border and fill
+  - Blur / Pixelate — draw a rectangle to obscure any region; choose Gaussian Blur or Pixelate style; intensity slider 1–100
+  - Highlight — draw a semi-transparent color band over any region; configurable color and opacity
+- **Layer arrangement** — right-click any annotation to Bring to Front, Bring Forward, Send Backward, or Send to Back; z-order is respected in both the preview and the exported image
+- **Clicking to select** — click any annotation in no-tool mode to automatically activate the correct tool and select that annotation
 - **Image effects** — optional border and drop shadow (offset, blur, opacity)
 - **Zoom** — 0.1× to 8× magnification with +/− buttons or pinch gesture
-- **Export** — Save As PNG/JPEG/TIFF via the title bar button, or copy to clipboard
-- **Persistent preferences** — all tool settings and the hotkey are saved across launches
-- **Configurable shortcut** — change the hotkey from the Settings dialog; the menu bar item always reflects the current shortcut
+- **Export** — Save As PNG/JPEG/TIFF, or copy to clipboard (⌘C)
+- **Persistent preferences** — all tool settings and hotkeys are saved across launches
+- **Two configurable shortcuts** — change the capture hotkey and the quick-capture hotkey independently in Settings
 
 ---
 
@@ -95,12 +101,16 @@ git push origin v1.0.0
 
 ### Taking a screenshot
 
-1. Press the global hotkey (default **⌥⇧P**) from any app.
+1. Press the capture hotkey (default **⌥⇧P**) from any app.
 2. The screen dims and a crosshair cursor appears.
 3. Click and drag to select the region you want to capture.
 4. Release — the editor opens with your selection.
 
 Press **Escape** at any point during selection to cancel.
+
+For a faster workflow, press the **Quick Capture** hotkey (default **⌥P**) to capture a region and copy it directly to the clipboard — the editor never opens.
+
+You can also open the editor without capturing: click the menu bar icon and choose **Open Editor**, then use **File → Open…** or **File → New from Clipboard** to load an image.
 
 ### Annotating
 
@@ -111,8 +121,10 @@ Select a tool from the toolbar at the top of the editor:
 | **Arrow** | Click-drag to draw. Drag the tail handle to reposition the start point. Drag the body to move the whole arrow. |
 | **Text** | Click to place a text box. Double-click an existing label to edit it inline. Drag to reposition. |
 | **Shape** | Click-drag to draw. Drag the bottom-right handle to resize. Drag the body to move. |
+| **Blur / Pixelate** | Click-drag to draw a blur region. Choose Gaussian Blur or Pixelate in the sidebar. Use the Intensity slider to control how strongly the content is obscured. |
+| **Highlight** | Click-drag to draw a highlight band. Choose the color and opacity in the sidebar. |
 
-Select any annotation and press **Delete** or **Backspace** to remove it. Right-click for a context menu.
+Click any annotation while no tool is active to select it — the correct tool activates automatically. Select any annotation and press **Delete** or **Backspace** to remove it. Right-click for a context menu including layer arrangement (Bring to Front, Bring Forward, Send Backward, Send to Back).
 
 ### Adjusting effects
 
@@ -125,21 +137,24 @@ All settings are saved automatically and restored on the next launch.
 
 ### Exporting
 
-- **Save As…** — click the button in the title bar to save as PNG, JPEG, or TIFF
+- **Save** (⌘S) — writes to the last-used file path; falls back to Save As on first save
+- **Save As…** (⌘⇧S) — choose a new path and format (PNG, JPEG, TIFF)
 - **Copy** — press **⌘C** or right-click → Copy Image to copy the annotated image to the clipboard
 
 ---
 
-## Changing the keyboard shortcut
+## Changing the keyboard shortcuts
+
+Grabbit has two configurable hotkeys: the main **Capture** shortcut (opens the editor after capture) and the **Quick Capture** shortcut (copies to clipboard silently).
 
 1. Click the menu bar icon and choose **Settings…**
-2. Click the shortcut field — it enters recording mode.
+2. Click the shortcut field you want to change — it enters recording mode.
 3. Press the new key combination (must include at least one of ⌘, ⌥, or ⌃).
 4. Click **Save**.
 
-The menu bar item title and icon tooltip update immediately to show the new shortcut. Press **Escape** in the recorder to cancel without changing anything.
+The menu bar item updates immediately. Press **Escape** in the recorder to cancel without changing anything.
 
-The shortcut is stored in `UserDefaults` and persists across relaunches.
+Both shortcuts are stored in `UserDefaults` and persist across relaunches.
 
 ---
 
