@@ -169,6 +169,9 @@ class AnnotationOverlay: NSView {
     private var selectedBlurID:  UUID?
     private var selectedHighlightID: UUID?
 
+    // Which corner of a rect-based annotation is being dragged.
+    enum ResizeCorner { case topLeft, topRight, bottomLeft, bottomRight }
+
     private enum DragState {
         case none
         case newArrow(start: CGPoint, current: CGPoint)
@@ -177,13 +180,13 @@ class AnnotationOverlay: NSView {
         case movingText(index: Int, lastLoc: CGPoint)
         case newShape(start: CGPoint, current: CGPoint)
         case movingShapeWhole(index: Int, lastLoc: CGPoint)
-        case resizingShape(index: Int, start: CGPoint, originalRect: CGRect)
+        case resizingShape(index: Int, corner: ResizeCorner, originalRect: CGRect)
         case newBlur(start: CGPoint, current: CGPoint)
         case movingBlurWhole(index: Int, lastLoc: CGPoint)
-        case resizingBlur(index: Int, start: CGPoint, originalRect: CGRect)
+        case resizingBlur(index: Int, corner: ResizeCorner, originalRect: CGRect)
         case newHighlight(start: CGPoint, current: CGPoint)
         case movingHighlightWhole(index: Int, lastLoc: CGPoint)
-        case resizingHighlight(index: Int, start: CGPoint, originalRect: CGRect)
+        case resizingHighlight(index: Int, corner: ResizeCorner, originalRect: CGRect)
     }
     private var dragState: DragState = .none
 
@@ -226,10 +229,10 @@ class AnnotationOverlay: NSView {
             items.append(DrawItem(zOrder: s.zOrder) {
                 self.drawShape(s, selected: self.selectedShapeID == s.id)
                 if self.selectedShapeID == s.id {
-                    self.drawShapeResizeHandle(at: self.toView(s.rect.origin))
-                    let brPoint = self.toView(CGPoint(x: s.rect.origin.x + s.rect.width,
-                                                     y: s.rect.origin.y))
-                    self.drawShapeResizeHandleBottomRight(at: brPoint)
+                    let viewOrigin = self.toView(s.rect.origin)
+                    let viewSize = CGSize(width: s.rect.width * self.imageDisplayRect.width,
+                                         height: s.rect.height * self.imageDisplayRect.height)
+                    self.drawCornerHandles(for: CGRect(origin: viewOrigin, size: viewSize))
                 }
             })
         }
@@ -384,20 +387,20 @@ class AnnotationOverlay: NSView {
         }
     }
 
-    private func drawShapeResizeHandle(at point: CGPoint) {
-        let r: CGFloat = 7
+    private func drawResizeHandle(at point: CGPoint) {
+        let r: CGFloat = 5
         let rect = CGRect(x: point.x - r, y: point.y - r, width: r*2, height: r*2)
         let circle = NSBezierPath(ovalIn: rect)
         NSColor.white.setFill(); circle.fill()
         NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
     }
 
-    private func drawShapeResizeHandleBottomRight(at point: CGPoint) {
-        let r: CGFloat = 7
-        let rect = CGRect(x: point.x - r, y: point.y - r, width: r*2, height: r*2)
-        let circle = NSBezierPath(ovalIn: rect)
-        NSColor.white.setFill(); circle.fill()
-        NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
+    private func drawCornerHandles(for viewRect: CGRect) {
+        let r = viewRect.standardized
+        drawResizeHandle(at: CGPoint(x: r.minX, y: r.minY))  // bottom-left
+        drawResizeHandle(at: CGPoint(x: r.maxX, y: r.minY))  // bottom-right
+        drawResizeHandle(at: CGPoint(x: r.minX, y: r.maxY))  // top-left
+        drawResizeHandle(at: CGPoint(x: r.maxX, y: r.maxY))  // top-right
     }
 
     private func drawBlurRegion(_ region: BlurRegion, selected: Bool) {
@@ -451,8 +454,7 @@ class AnnotationOverlay: NSView {
 
                     drawBlurRegionBorder(viewRect, selected: selected)
                     if selected {
-                        let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
-                        drawShapeResizeHandleBottomRight(at: br)
+                        drawCornerHandles(for: viewRect)
                     }
                     return
                 }
@@ -461,8 +463,7 @@ class AnnotationOverlay: NSView {
 
         drawBlurRegionBorder(viewRect, selected: selected)
         if selected {
-            let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
-            drawShapeResizeHandleBottomRight(at: br)
+            drawCornerHandles(for: viewRect)
         }
     }
 
@@ -485,8 +486,7 @@ class AnnotationOverlay: NSView {
         let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
         drawHighlightRect(viewRect, color: highlight.color, opacity: highlight.opacity, selected: selected)
         if selected {
-            let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
-            drawShapeResizeHandleBottomRight(at: br)
+            drawCornerHandles(for: viewRect)
         }
     }
 
@@ -554,6 +554,63 @@ class AnnotationOverlay: NSView {
         needsDisplay = true
     }
 
+    // Returns which corner handle of viewRect was hit by loc, or nil if none.
+    private func hitCorner(in viewRect: CGRect, at loc: CGPoint) -> ResizeCorner? {
+        let r = viewRect.standardized
+        let hitR: CGFloat = 8  // hit radius (slightly larger than visual radius for easier grabbing)
+        let corners: [(CGPoint, ResizeCorner)] = [
+            (CGPoint(x: r.minX, y: r.minY), .bottomLeft),
+            (CGPoint(x: r.maxX, y: r.minY), .bottomRight),
+            (CGPoint(x: r.minX, y: r.maxY), .topLeft),
+            (CGPoint(x: r.maxX, y: r.maxY), .topRight),
+        ]
+        return corners.first(where: { hypot(loc.x - $0.0.x, loc.y - $0.0.y) <= hitR })?.1
+    }
+
+    // Returns the view-space point for a given corner of a view rect.
+    private func cornerPoint(of viewRect: CGRect, corner: ResizeCorner) -> CGPoint {
+        let r = viewRect.standardized
+        switch corner {
+        case .bottomLeft:  return CGPoint(x: r.minX, y: r.minY)
+        case .bottomRight: return CGPoint(x: r.maxX, y: r.minY)
+        case .topLeft:     return CGPoint(x: r.minX, y: r.maxY)
+        case .topRight:    return CGPoint(x: r.maxX, y: r.maxY)
+        }
+    }
+
+    // Applies a drag delta (in normalized units) to origRect for the given corner.
+    private func applyResize(corner: ResizeCorner, origRect: CGRect,
+                             dx: CGFloat, dy: CGFloat) -> CGRect {
+        var r = origRect
+        let minSize: CGFloat = 0.02
+        switch corner {
+        case .bottomRight:
+            // Top edge is fixed; bottom edge moves with the drag.
+            // In normalized space y=0 is bottom, so origin.y is the bottom edge.
+            r.origin.y    = origRect.origin.y + dy
+            r.size.width  = max(minSize, origRect.width  + dx)
+            r.size.height = max(minSize, origRect.height - dy)
+        case .bottomLeft:
+            // Top and right edges are fixed; bottom-left corner moves.
+            let newW = max(minSize, origRect.width - dx)
+            r.origin.x    = origRect.origin.x + origRect.width - newW
+            r.size.width  = newW
+            r.origin.y    = origRect.origin.y + dy
+            r.size.height = max(minSize, origRect.height - dy)
+        case .topRight:
+            // Bottom and left edges are fixed; top-right corner moves.
+            r.size.width  = max(minSize, origRect.width  + dx)
+            r.size.height = max(minSize, origRect.height + dy)
+        case .topLeft:
+            // Bottom and right edges are fixed; top-left corner moves.
+            let newW = max(minSize, origRect.width - dx)
+            r.origin.x    = origRect.origin.x + origRect.width - newW
+            r.size.width  = newW
+            r.size.height = max(minSize, origRect.height + dy)
+        }
+        return r
+    }
+
     override func mouseDown(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
 
@@ -612,15 +669,16 @@ class AnnotationOverlay: NSView {
             }
 
         case .shape:
-            // Check resize handle of selected shape first.
+            // Check resize handles of selected shape first.
             if let selID = selectedShapeID,
                let selIdx = shapes.firstIndex(where: { $0.id == selID }) {
                 let shape = shapes[selIdx]
-                let brPoint = toView(CGPoint(x: shape.rect.origin.x + shape.rect.width,
-                                            y: shape.rect.origin.y))
-                let handleRect = CGRect(x: brPoint.x - 7, y: brPoint.y - 7, width: 14, height: 14)
-                if handleRect.contains(loc) {
-                    dragState = .resizingShape(index: selIdx, start: loc, originalRect: shape.rect)
+                let viewOrigin = toView(shape.rect.origin)
+                let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
+                                     height: shape.rect.height * imageDisplayRect.height)
+                let viewRect = CGRect(origin: viewOrigin, size: viewSize)
+                if let corner = hitCorner(in: viewRect, at: loc) {
+                    dragState = .resizingShape(index: selIdx, corner: corner, originalRect: shape.rect)
                     needsDisplay = true
                     break
                 }
@@ -640,18 +698,16 @@ class AnnotationOverlay: NSView {
             }
 
         case .blur:
-            // Check resize handle of selected blur region first.
+            // Check resize handles of selected blur region first.
             if let selID = selectedBlurID,
                let selIdx = blurRegions.firstIndex(where: { $0.id == selID }) {
                 let region = blurRegions[selIdx]
                 let viewOrigin = toView(region.rect.origin)
                 let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
                                      height: region.rect.height * imageDisplayRect.height)
-                let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
-                let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
-                let handleRect = CGRect(x: br.x - 7, y: br.y - 7, width: 14, height: 14)
-                if handleRect.contains(loc) {
-                    dragState = .resizingBlur(index: selIdx, start: loc, originalRect: region.rect)
+                let viewRect = CGRect(origin: viewOrigin, size: viewSize)
+                if let corner = hitCorner(in: viewRect, at: loc) {
+                    dragState = .resizingBlur(index: selIdx, corner: corner, originalRect: region.rect)
                     needsDisplay = true
                     break
                 }
@@ -669,18 +725,16 @@ class AnnotationOverlay: NSView {
             }
 
         case .highlight:
-            // Check resize handle of selected highlight first.
+            // Check resize handles of selected highlight first.
             if let selID = selectedHighlightID,
                let selIdx = highlights.firstIndex(where: { $0.id == selID }) {
                 let h = highlights[selIdx]
                 let viewOrigin = toView(h.rect.origin)
                 let viewSize = CGSize(width: h.rect.width * imageDisplayRect.width,
                                      height: h.rect.height * imageDisplayRect.height)
-                let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
-                let br = CGPoint(x: viewRect.maxX, y: viewRect.minY)
-                let handleRect = CGRect(x: br.x - 7, y: br.y - 7, width: 14, height: 14)
-                if handleRect.contains(loc) {
-                    dragState = .resizingHighlight(index: selIdx, start: loc, originalRect: h.rect)
+                let viewRect = CGRect(origin: viewOrigin, size: viewSize)
+                if let corner = hitCorner(in: viewRect, at: loc) {
+                    dragState = .resizingHighlight(index: selIdx, corner: corner, originalRect: h.rect)
                     needsDisplay = true
                     break
                 }
@@ -733,19 +787,17 @@ class AnnotationOverlay: NSView {
             dragState = .movingShapeWhole(index: idx, lastLoc: loc); needsDisplay = true
         case .newShape(let s, _):
             dragState = .newShape(start: s, current: loc); needsDisplay = true
-        case .resizingShape(let idx, _, let origRect):
+        case .resizingShape(let idx, let corner, let origRect):
             let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let origBR = toView(CGPoint(x: origRect.origin.x + origRect.width,
-                                       y: origRect.origin.y))
-            let dx = (loc.x - origBR.x) / r.width
-            let dy = (loc.y - origBR.y) / r.height
-            var newRect = origRect
-            newRect.size.width += dx
-            newRect.size.height += dy
-            // Clamp to minimum size
-            if newRect.size.width < 0.02 { newRect.size.width = 0.02 }
-            if newRect.size.height < 0.02 { newRect.size.height = 0.02 }
-            shapes[idx].rect = newRect
+            // Compute the original corner position in view space.
+            let origViewRect = CGRect(
+                origin: toView(origRect.origin),
+                size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
+            ).standardized
+            let origCornerPt = cornerPoint(of: origViewRect, corner: corner)
+            let dx = (loc.x - origCornerPt.x) / r.width
+            let dy = (loc.y - origCornerPt.y) / r.height
+            shapes[idx].rect = applyResize(corner: corner, origRect: origRect, dx: dx, dy: dy)
             needsDisplay = true
         case .movingBlurWhole(let idx, let last):
             let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
@@ -755,19 +807,16 @@ class AnnotationOverlay: NSView {
             dragState = .movingBlurWhole(index: idx, lastLoc: loc); needsDisplay = true
         case .newBlur(let s, _):
             dragState = .newBlur(start: s, current: loc); needsDisplay = true
-        case .resizingBlur(let idx, _, let origRect):
+        case .resizingBlur(let idx, let corner, let origRect):
             let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
             let origViewRect = CGRect(
                 origin: toView(origRect.origin),
                 size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
             ).standardized
-            let origBR = CGPoint(x: origViewRect.maxX, y: origViewRect.minY)
-            let dx = (loc.x - origBR.x) / r.width
-            let dy = (loc.y - origBR.y) / r.height
-            var newRect = origRect
-            newRect.size.width  = max(0.02, origRect.width  + dx)
-            newRect.size.height = max(0.02, origRect.height - dy)
-            blurRegions[idx].rect = newRect
+            let origCornerPt = cornerPoint(of: origViewRect, corner: corner)
+            let dx = (loc.x - origCornerPt.x) / r.width
+            let dy = (loc.y - origCornerPt.y) / r.height
+            blurRegions[idx].rect = applyResize(corner: corner, origRect: origRect, dx: dx, dy: dy)
             needsDisplay = true
         case .movingHighlightWhole(let idx, let last):
             let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
@@ -777,19 +826,16 @@ class AnnotationOverlay: NSView {
             dragState = .movingHighlightWhole(index: idx, lastLoc: loc); needsDisplay = true
         case .newHighlight(let s, _):
             dragState = .newHighlight(start: s, current: loc); needsDisplay = true
-        case .resizingHighlight(let idx, _, let origRect):
+        case .resizingHighlight(let idx, let corner, let origRect):
             let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
             let origViewRect = CGRect(
                 origin: toView(origRect.origin),
                 size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
             ).standardized
-            let origBR = CGPoint(x: origViewRect.maxX, y: origViewRect.minY)
-            let dx = (loc.x - origBR.x) / r.width
-            let dy = (loc.y - origBR.y) / r.height
-            var newRect = origRect
-            newRect.size.width  = max(0.02, origRect.width  + dx)
-            newRect.size.height = max(0.02, origRect.height - dy)
-            highlights[idx].rect = newRect
+            let origCornerPt = cornerPoint(of: origViewRect, corner: corner)
+            let dx = (loc.x - origCornerPt.x) / r.width
+            let dy = (loc.y - origCornerPt.y) / r.height
+            highlights[idx].rect = applyResize(corner: corner, origRect: origRect, dx: dx, dy: dy)
             needsDisplay = true
         case .none: break
         }
