@@ -105,10 +105,11 @@ class OverlayWindowController: NSWindowController {
 
         let cropped = NSImage(cgImage: cgCropped, size: viewRect.size)
 
-        // Show the editor BEFORE closing the overlay so focus never transfers
-        // to another app — that's what causes the menu bar to show the wrong app.
-        EditorWindowController.show(image: cropped)
+        // Dismiss the overlay first so it's fully gone before the editor
+        // activates — having a screenSaver-level window close during activation
+        // can interfere with the menu bar appearing.
         dismiss()
+        EditorWindowController.show(image: cropped)
     }
 }
 

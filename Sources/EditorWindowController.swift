@@ -74,10 +74,24 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     static func show(image: NSImage) {
         let c = EditorWindowController(image: image)
         openEditors.append(c)
+        // Known macOS bug (FB7743313): setActivationPolicy(.regular) alone doesn't
+        // update the menu bar. The only reliable fix is to briefly activate another
+        // app then immediately re-activate ourselves, forcing the window server
+        // through the full activation path.
+        // Finder is always running and is the guaranteed fallback.
         NSApp.setActivationPolicy(.regular)
-        c.window?.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
-        c.window?.makeKeyAndOrderFront(nil)
+        let other = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier != Bundle.main.bundleIdentifier &&
+            $0.activationPolicy == .regular &&
+            $0 != NSRunningApplication.current
+        }) ?? NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.apple.finder"
+        })
+        other?.activate(options: [])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NSApp.activate(ignoringOtherApps: true)
+            c.window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     // MARK: - Init
