@@ -35,9 +35,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Grabbit", action: #selector(openAbout), keyEquivalent: "")
         appMenu.addItem(.separator())
-        // Cmd+Q closes the front editor window but keeps Grabbit running in
-        // the menu bar. To fully quit, use "Quit Grabbit" in the status bar menu.
-        appMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Close Window", action: #selector(closeCurrentWindow), keyEquivalent: "q")
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
@@ -86,7 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         menu.addItem(.separator())
         menu.addItem(withTitle: "About Grabbit", action: #selector(openAbout), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Quit Grabbit", action: #selector(quitGrabbit), keyEquivalent: "")
 
         statusItem.menu = menu
     }
@@ -176,6 +174,57 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
 
     @objc func startCapture()      { CaptureSession.start() }
     @objc func startQuickCapture() { CaptureSession.startQuick() }
+
+    @objc private func closeCurrentWindow() {
+        guard let editor = NSApp.keyWindow?.windowController as? EditorWindowController else {
+            NSApp.keyWindow?.performClose(nil)
+            return
+        }
+        guard editor.grabbitDocument.isDirty else {
+            editor.window?.close()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Save changes before closing?"
+        alert.informativeText = "Your unsaved changes will be lost if you close without saving."
+        alert.addButton(withTitle: "Save As…")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            editor.saveAs(nil)
+        case .alertSecondButtonReturn:
+            editor.window?.close()
+        default:
+            break
+        }
+    }
+
+    @objc private func quitGrabbit() {
+        let dirtyEditors = NSApp.windows
+            .compactMap { $0.windowController as? EditorWindowController }
+            .filter { $0.grabbitDocument.isDirty }
+
+        guard !dirtyEditors.isEmpty else {
+            NSApp.terminate(nil)
+            return
+        }
+
+        let count = dirtyEditors.count
+        let alert = NSAlert()
+        alert.messageText = count == 1
+            ? "You have unsaved changes. Quit anyway?"
+            : "You have \(count) images with unsaved changes. Quit anyway?"
+        alert.informativeText = "Your unsaved changes will be lost."
+        alert.addButton(withTitle: "Quit Anyway")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
+    }
 
     // MARK: - Editor / Clipboard
 

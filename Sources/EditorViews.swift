@@ -56,12 +56,57 @@ extension CGPoint {
 // MARK: - UI builder helpers
 
 func makeToolButton(_ title: String) -> NSButton {
-    let b = NSButton()
+    let b = ToolbarToggleButton()
     b.title = title
     b.setButtonType(.toggle)
     b.bezelStyle = .rounded
+    b.controlSize = .regular
     b.translatesAutoresizingMaskIntoConstraints = false
     return b
+}
+
+// MARK: - ToolbarToggleButton
+// Uses the standard AppKit bezel for rendering — no custom drawing.
+// When active, tints the bezel with the accent color and uses white text.
+// When inactive, restores the default appearance.
+
+class ToolbarToggleButton: NSButton {
+
+    override var state: NSControl.StateValue {
+        didSet { updateAppearance() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearance()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
+    private func updateAppearance() {
+        if state == .on {
+            bezelColor        = .controlAccentColor
+            contentTintColor  = .white
+            attributedTitle   = NSAttributedString(
+                string: title,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
+                    .foregroundColor: NSColor.white,
+                ])
+        } else {
+            bezelColor        = nil
+            contentTintColor  = nil
+            attributedTitle   = NSAttributedString(
+                string: title,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .regular),
+                    .foregroundColor: NSColor.labelColor,
+                ])
+        }
+    }
 }
 
 func sld(_ min: Double, _ max: Double, _ val: Double) -> NSSlider {

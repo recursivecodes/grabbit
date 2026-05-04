@@ -58,7 +58,11 @@ class CaptureSession {
     static func captureDidFinish(image: NSImage) {
         switch mode {
         case .editor:
-            EditorWindowController.show(image: image)
+            let doc = GrabbitDocument(image: image)
+            NSDocumentController.shared.addDocument(doc)
+            doc.makeWindowControllers()
+            doc.showWindows()
+            EditorWindowController.activateApp()
         case .quickClipboard:
             let pb = NSPasteboard.general
             pb.clearContents()

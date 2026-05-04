@@ -42,8 +42,8 @@ struct Highlight {
     var id = UUID()
     var zOrder: Int = 0
     var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
-    var color: NSColor    // the highlight tint (alpha is ignored; use opacity instead)
-    var opacity: CGFloat  // 0-1, always < 1 so the highlight is never fully opaque
+    var color: NSColor
+    var opacity: CGFloat  // 0-1
 }
 
 // MARK: - Arrow
@@ -62,23 +62,22 @@ struct Arrow {
 struct TextAnnotation {
     var id = UUID()
     var zOrder: Int = 0
-    var position: CGPoint   // normalized 0-1, y=0 at bottom; baseline-left of text in view coords
+    var position: CGPoint   // normalized 0-1, y=0 at bottom; baseline-left of text
     var content: String
     var fontName: String
     var fontSize: CGFloat
     var fontColor: NSColor
     var outlineColor: NSColor
-    var outlineWeight: CGFloat  // visible outer stroke width in points (0 = no outline)
+    var outlineWeight: CGFloat
 }
 
-// MARK: - Attributed string helper (internal so EditorWindowController can use it for export)
+// MARK: - Attributed string helper
 
 func makeTextAttrStr(_ content: String, font: NSFont,
                       fontColor: NSColor, outlineColor: NSColor,
                       outlineWeight: CGFloat, strokeOnly: Bool) -> NSAttributedString {
     var attrs: [NSAttributedString.Key: Any] = [.font: font]
     if strokeOnly && outlineWeight > 0 {
-        // Positive strokeWidth = stroke only, no fill. Value is % of font point size.
         let pct = (outlineWeight * 2.0 / font.pointSize) * 100.0
         attrs[.strokeColor]     = outlineColor
         attrs[.strokeWidth]     = pct
@@ -90,42 +89,37 @@ func makeTextAttrStr(_ content: String, font: NSFont,
 }
 
 // MARK: - AnnotationOverlay
+//
+// Pure view — owns no model state. All annotation data is read from `document`
+// and all mutations go through document methods (which register undo).
 
 class AnnotationOverlay: NSView {
 
-    // MARK: Arrow state
-    var arrows: [Arrow] = []
-    var currentWeight: CGFloat = 2
-    var currentColor:  NSColor = .systemRed
+    // MARK: Document reference
+    weak var document: GrabbitDocument?
 
-    // MARK: Text state
-    var textAnnotations: [TextAnnotation] = []
-    var currentFontName:     String  = "Helvetica-Bold"
-    var currentFontSize:     CGFloat = 24
-    var currentFontColor:    NSColor = .white
-    var currentOutlineColor: NSColor = .black
-    var currentOutlineWeight: CGFloat = 2
+    var arrows:          [Arrow]          { document?.arrows          ?? [] }
+    var textAnnotations: [TextAnnotation] { document?.textAnnotations ?? [] }
+    var shapes:          [Shape]          { document?.shapes          ?? [] }
+    var blurRegions:     [BlurRegion]     { document?.blurRegions     ?? [] }
+    var highlights:      [Highlight]      { document?.highlights      ?? [] }
 
-    // MARK: Shape state
-    var shapes: [Shape] = []
+    // MARK: Current tool defaults (set by EditorWindowController from sidebar)
+    var currentWeight:        CGFloat   = 2
+    var currentColor:         NSColor   = .systemRed
+    var currentFontName:      String    = "Helvetica-Bold"
+    var currentFontSize:      CGFloat   = 24
+    var currentFontColor:     NSColor   = .white
+    var currentOutlineColor:  NSColor   = .black
+    var currentOutlineWeight: CGFloat   = 2
     var currentShapeType:     ShapeType = .rectangle
-    var currentBorderWeight:  CGFloat = 2
-    var currentBorderColor:   NSColor = .black
-    var currentFillColor:     NSColor = .clear
-
-    // MARK: Blur state
-    var blurRegions: [BlurRegion] = []
-    var currentBlurIntensity: CGFloat = 80
-    var currentBlurStyle: BlurStyle = .blur
-
-    // MARK: Highlight state
-    var highlights: [Highlight] = []
-    var currentHighlightColor:   NSColor  = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
-    var currentHighlightOpacity: CGFloat  = 0.4
-
-    // MARK: Z-order counter — incremented each time a new annotation is added.
-    private var zOrderCounter: Int = 0
-    private func nextZOrder() -> Int { zOrderCounter += 1; return zOrderCounter }
+    var currentBorderWeight:  CGFloat   = 2
+    var currentBorderColor:   NSColor   = .black
+    var currentFillColor:     NSColor   = .clear
+    var currentBlurIntensity: CGFloat   = 80
+    var currentBlurStyle:     BlurStyle = .blur
+    var currentHighlightColor:   NSColor = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
+    var currentHighlightOpacity: CGFloat = 0.4
 
     // MARK: Active tool
     var activeTool: AnnotationTool = .none {
@@ -133,31 +127,22 @@ class AnnotationOverlay: NSView {
             window?.invalidateCursorRects(for: self)
             if activeTool != .arrow     { selectedArrowID = nil }
             if activeTool != .text      { finalizeEditing(); selectedTextID = nil }
-            if activeTool != .shape     { finalizeShape(); selectedShapeID = nil }
+            if activeTool != .shape     { selectedShapeID = nil }
             if activeTool != .blur      { selectedBlurID = nil }
             if activeTool != .highlight { selectedHighlightID = nil }
             needsDisplay = true
         }
     }
 
-    // Legacy shim for arrow-only callers.
-    var isToolActive: Bool {
-        get { activeTool == .arrow }
-        set { activeTool = newValue ? .arrow : .none }
-    }
-
-    // Callbacks
+    // MARK: Callbacks
     var imageDisplayRectProvider: (() -> CGRect)?
-    var onCopy:   (() -> Void)?
-    var onChange: (() -> Void)?
-    var onTextSelectionChanged: ((TextAnnotation?) -> Void)?
-    // Called when a click in .none mode hits an annotation — activates the
-    // matching tool and selects the item so the sidebar shows its properties.
-    var onActivateTool: ((AnnotationTool) -> Void)?
-    // Provides the current source image for live blur preview.
-    var imageProvider: (() -> NSImage?)?
+    var onCopy:                   (() -> Void)?
+    var onTextSelectionChanged:   ((TextAnnotation?) -> Void)?
+    var onActivateTool:           ((AnnotationTool) -> Void)?
+    var onSelectionChanged:       ((AnnotationTool) -> Void)?  // fires when a hit-test selects an annotation
+    var imageProvider:            (() -> NSImage?)?
 
-    // MARK: Private state
+    // MARK: Selection state (view-only, not model)
     private var selectedArrowID: UUID?
     private var selectedTextID:  UUID? {
         didSet {
@@ -165,35 +150,42 @@ class AnnotationOverlay: NSView {
             onTextSelectionChanged?(ann)
         }
     }
-    private var selectedShapeID: UUID?
-    private var selectedBlurID:  UUID?
+    private var selectedShapeID:     UUID?
+    private var selectedBlurID:      UUID?
     private var selectedHighlightID: UUID?
 
-    // Which corner of a rect-based annotation is being dragged.
     enum ResizeCorner { case topLeft, topRight, bottomLeft, bottomRight }
 
-    private enum DragState {
+    fileprivate enum DragState {
         case none
         case newArrow(start: CGPoint, current: CGPoint)
-        case movingArrowWhole(index: Int, lastLoc: CGPoint)
-        case movingArrowTail(index: Int)
-        case movingText(index: Int, lastLoc: CGPoint)
+        case movingArrowWhole(id: UUID, origStart: CGPoint, origEnd: CGPoint, lastLoc: CGPoint)
+        case movingArrowTail(id: UUID, origStart: CGPoint)
+        case movingText(id: UUID, origPos: CGPoint, lastLoc: CGPoint)
         case newShape(start: CGPoint, current: CGPoint)
-        case movingShapeWhole(index: Int, lastLoc: CGPoint)
-        case resizingShape(index: Int, corner: ResizeCorner, originalRect: CGRect)
+        case movingShapeWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
+        case resizingShape(id: UUID, corner: ResizeCorner, originalRect: CGRect)
         case newBlur(start: CGPoint, current: CGPoint)
-        case movingBlurWhole(index: Int, lastLoc: CGPoint)
-        case resizingBlur(index: Int, corner: ResizeCorner, originalRect: CGRect)
+        case movingBlurWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
+        case resizingBlur(id: UUID, corner: ResizeCorner, originalRect: CGRect)
         case newHighlight(start: CGPoint, current: CGPoint)
-        case movingHighlightWhole(index: Int, lastLoc: CGPoint)
-        case resizingHighlight(index: Int, corner: ResizeCorner, originalRect: CGRect)
+        case movingHighlightWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
+        case resizingHighlight(id: UUID, corner: ResizeCorner, originalRect: CGRect)
     }
     private var dragState: DragState = .none
 
+    // Live drag scratch vars — updated each mouseDragged tick, committed at mouseUp.
+    private var liveDragArrowStart: CGPoint?
+    private var liveDragArrowEnd:   CGPoint?
+    private var liveDragRect:       CGRect?
+    private var liveDragTextPos:    CGPoint?   // for text move preview
+    // Anchor point (view coords) captured at mouseDown for whole-move drags.
+    private var dragAnchor:         CGPoint = .zero
+
+    // Inline text editing
     private var editingScrollView: NSScrollView?
-    private var editingTextView:   NSTextView?
-    private var editingField: NSTextField?   // unused – kept for ABI compat
-    private var editingID:    UUID?
+    private var editingTextView:   EscapableTextView?
+    private var editingID:         UUID?
 
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -203,113 +195,155 @@ class AnnotationOverlay: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        // Build a unified draw list sorted by zOrder so layering is respected.
         struct DrawItem { let zOrder: Int; let draw: () -> Void }
         var items: [DrawItem] = []
 
         for arrow in arrows {
             let a = arrow
+            let drawStart: CGPoint
+            let drawEnd:   CGPoint
+            if (dragState.isMovingArrow(id: a.id) || dragState.isMovingArrowTail(id: a.id)),
+               let ls = liveDragArrowStart, let le = liveDragArrowEnd {
+                drawStart = toView(ls); drawEnd = toView(le)
+            } else {
+                drawStart = toView(a.start); drawEnd = toView(a.end)
+            }
             items.append(DrawItem(zOrder: a.zOrder) {
-                self.renderArrow(from: self.toView(a.start), to: self.toView(a.end),
-                                 weight: a.weight, color: a.color)
+                self.renderArrow(from: drawStart, to: drawEnd, weight: a.weight, color: a.color)
                 if self.selectedArrowID == a.id {
-                    self.drawArrowTailHandle(at: self.toView(a.start))
+                    self.drawArrowTailHandle(at: drawStart)
                 }
             })
         }
+
         for ann in textAnnotations {
             let a = ann
             guard a.id != editingID else { continue }
             items.append(DrawItem(zOrder: a.zOrder) {
-                self.drawTextAnnotation(a, selected: self.selectedTextID == a.id)
+                var drawAnn = a
+                if case .movingText(let id, _, _) = self.dragState,
+                   id == a.id, let lp = self.liveDragTextPos {
+                    drawAnn.position = lp
+                }
+                self.drawTextAnnotation(drawAnn, selected: self.selectedTextID == a.id)
             })
         }
+
         for shape in shapes {
             let s = shape
+            let drawRect: CGRect
+            if dragState.isMovingOrResizingShape(id: s.id), let lr = liveDragRect {
+                drawRect = lr
+            } else {
+                let viewOrigin = toView(s.rect.origin)
+                let viewSize = CGSize(width: s.rect.width * imageDisplayRect.width,
+                                     height: s.rect.height * imageDisplayRect.height)
+                drawRect = CGRect(origin: viewOrigin, size: viewSize)
+            }
             items.append(DrawItem(zOrder: s.zOrder) {
-                self.drawShape(s, selected: self.selectedShapeID == s.id)
+                self.drawShapeRect(drawRect.standardized, shapeType: s.shapeType,
+                                   borderWeight: s.borderWeight, borderColor: s.borderColor,
+                                   fillColor: s.fillColor, selected: self.selectedShapeID == s.id)
                 if self.selectedShapeID == s.id {
-                    let viewOrigin = self.toView(s.rect.origin)
-                    let viewSize = CGSize(width: s.rect.width * self.imageDisplayRect.width,
-                                         height: s.rect.height * self.imageDisplayRect.height)
-                    self.drawCornerHandles(for: CGRect(origin: viewOrigin, size: viewSize))
+                    self.drawCornerHandles(for: drawRect.standardized)
                 }
             })
         }
+
         for region in blurRegions {
             let r = region
+            let drawRect: CGRect
+            let sampleRect: CGRect  // normalized rect used to sample pixels from the source image
+            if dragState.isMovingOrResizingBlur(id: r.id), let lr = liveDragRect {
+                drawRect   = lr
+                sampleRect = viewRectToNorm(lr.standardized)
+            } else {
+                let viewOrigin = toView(r.rect.origin)
+                let viewSize = CGSize(width: r.rect.width * imageDisplayRect.width,
+                                     height: r.rect.height * imageDisplayRect.height)
+                drawRect   = CGRect(origin: viewOrigin, size: viewSize)
+                sampleRect = r.rect
+            }
             items.append(DrawItem(zOrder: r.zOrder) {
-                self.drawBlurRegion(r, selected: self.selectedBlurID == r.id)
+                var drawRegion = r
+                drawRegion.rect = sampleRect
+                self.drawBlurRegion(drawRegion, viewRect: drawRect.standardized,
+                                    selected: self.selectedBlurID == r.id)
             })
         }
+
         for highlight in highlights {
             let h = highlight
+            let drawRect: CGRect
+            if dragState.isMovingOrResizingHighlight(id: h.id), let lr = liveDragRect {
+                drawRect = lr
+            } else {
+                let viewOrigin = toView(h.rect.origin)
+                let viewSize = CGSize(width: h.rect.width * imageDisplayRect.width,
+                                     height: h.rect.height * imageDisplayRect.height)
+                drawRect = CGRect(origin: viewOrigin, size: viewSize)
+            }
             items.append(DrawItem(zOrder: h.zOrder) {
-                self.drawHighlight(h, selected: self.selectedHighlightID == h.id)
+                self.drawHighlightRect(drawRect.standardized, color: h.color,
+                                       opacity: h.opacity,
+                                       selected: self.selectedHighlightID == h.id)
+                if self.selectedHighlightID == h.id {
+                    self.drawCornerHandles(for: drawRect.standardized)
+                }
             })
         }
 
         items.sorted { $0.zOrder < $1.zOrder }.forEach { $0.draw() }
 
-        // In-progress new annotations drawn on top of everything.
+        // In-progress new annotations drawn on top.
         if case .newArrow(let s, let c) = dragState {
             renderArrow(from: s, to: c, weight: currentWeight, color: currentColor)
         }
         if case .newShape(let s, let c) = dragState {
-            var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
-            rect = rect.standardized
+            let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
             drawShapeRect(rect, shapeType: currentShapeType,
                          borderWeight: currentBorderWeight, borderColor: currentBorderColor,
                          fillColor: currentFillColor, selected: false)
         }
         if case .newBlur(let s, let c) = dragState {
-            var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
-            rect = rect.standardized
+            let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
             drawBlurRegionBorder(rect, selected: false)
         }
         if case .newHighlight(let s, let c) = dragState {
-            var rect = CGRect(origin: s, size: CGSize(width: c.x - s.x, height: c.y - s.y))
-            rect = rect.standardized
-            drawHighlightRect(rect, color: currentHighlightColor, opacity: currentHighlightOpacity, selected: false)
+            let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
+            drawHighlightRect(rect, color: currentHighlightColor,
+                              opacity: currentHighlightOpacity, selected: false)
         }
     }
 
+    // MARK: - Draw helpers
+
     private func drawTextAnnotation(_ ann: TextAnnotation, selected: Bool) {
         let pt = toView(ann.position)
-        let font = NSFont(name: ann.fontName, size: ann.fontSize) ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
-
+        let font = NSFont(name: ann.fontName, size: ann.fontSize)
+                   ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
         if !ann.content.isEmpty {
-            // Two-pass: stroke outline first, fill on top.
             if ann.outlineWeight > 0 {
-                makeTextAttrStr(ann.content, font: font,
-                                fontColor: .clear, outlineColor: ann.outlineColor,
-                                outlineWeight: ann.outlineWeight, strokeOnly: true)
-                    .draw(at: pt)
+                makeTextAttrStr(ann.content, font: font, fontColor: .clear,
+                                outlineColor: ann.outlineColor,
+                                outlineWeight: ann.outlineWeight, strokeOnly: true).draw(at: pt)
             }
-            makeTextAttrStr(ann.content, font: font,
-                            fontColor: ann.fontColor, outlineColor: ann.outlineColor,
-                            outlineWeight: ann.outlineWeight, strokeOnly: false)
-                .draw(at: pt)
+            makeTextAttrStr(ann.content, font: font, fontColor: ann.fontColor,
+                            outlineColor: ann.outlineColor,
+                            outlineWeight: ann.outlineWeight, strokeOnly: false).draw(at: pt)
         }
-
         if selected {
-            let size: CGSize
-            if ann.content.isEmpty {
-                size = CGSize(width: max(80, ann.fontSize * 4), height: ann.fontSize * 1.4)
-            } else {
-                size = makeTextAttrStr(ann.content, font: font,
-                                       fontColor: ann.fontColor, outlineColor: ann.outlineColor,
-                                       outlineWeight: ann.outlineWeight, strokeOnly: false).size()
-            }
-            let selRect = CGRect(x: pt.x - 4,
-                                 y: pt.y - abs(font.descender) - 2,
-                                 width: size.width + 8,
-                                 height: size.height + 4)
+            let size: CGSize = ann.content.isEmpty
+                ? CGSize(width: max(80, ann.fontSize * 4), height: ann.fontSize * 1.4)
+                : makeTextAttrStr(ann.content, font: font, fontColor: ann.fontColor,
+                                  outlineColor: ann.outlineColor,
+                                  outlineWeight: ann.outlineWeight, strokeOnly: false).size()
+            let selRect = CGRect(x: pt.x-4, y: pt.y - abs(font.descender) - 2,
+                                 width: size.width+8, height: size.height+4)
             let path = NSBezierPath(rect: selRect)
             path.lineWidth = 1.5
             NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
-            path.setLineDash([5, 3], count: 2, phase: 0)
-            path.stroke()
+            path.setLineDash([5, 3], count: 2, phase: 0); path.stroke()
         }
     }
 
@@ -324,734 +358,869 @@ class AnnotationOverlay: NSView {
         let head = NSBezierPath(); head.lineCapStyle = .round
         for sign: CGFloat in [-.pi/6, .pi/6] {
             head.move(to: to)
-            head.line(to: CGPoint(x: to.x - headLen * cos(angle + sign),
-                                  y: to.y - headLen * sin(angle + sign)))
+            head.line(to: CGPoint(x: to.x - headLen * cos(angle+sign),
+                                  y: to.y - headLen * sin(angle+sign)))
         }
         head.lineWidth = weight; color.setStroke(); head.stroke()
     }
 
     private func drawArrowTailHandle(at point: CGPoint) {
         let r: CGFloat = 7
-        let rect = CGRect(x: point.x - r, y: point.y - r, width: r*2, height: r*2)
-        let circle = NSBezierPath(ovalIn: rect)
+        let circle = NSBezierPath(ovalIn: CGRect(x: point.x-r, y: point.y-r,
+                                                  width: r*2, height: r*2))
         NSColor.white.setFill(); circle.fill()
         NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
-    }
-
-    private func drawShape(_ shape: Shape, selected: Bool) {
-        let viewRect = toView(shape.rect.origin)
-        let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
-                             height: shape.rect.height * imageDisplayRect.height)
-        var viewRectFinal = CGRect(origin: viewRect, size: viewSize)
-        viewRectFinal = viewRectFinal.standardized
-        drawShapeRect(viewRectFinal, shapeType: shape.shapeType,
-                     borderWeight: shape.borderWeight, borderColor: shape.borderColor,
-                     fillColor: shape.fillColor, selected: selected)
     }
 
     private func drawShapeRect(_ rect: CGRect, shapeType: ShapeType,
                                borderWeight: CGFloat, borderColor: NSColor,
                                fillColor: NSColor, selected: Bool) {
-        let path = NSBezierPath()
         let r = rect.standardized
-
+        let path = NSBezierPath()
         switch shapeType {
-        case .circle:
-            path.appendOval(in: r)
-        case .rectangle:
-            path.appendRect(r)
-        case .roundedRectangle:
-            path.appendRoundedRect(r, xRadius: 10, yRadius: 10)
+        case .circle:           path.appendOval(in: r)
+        case .rectangle:        path.appendRect(r)
+        case .roundedRectangle: path.appendRoundedRect(r, xRadius: 10, yRadius: 10)
         }
-
-        // Fill
-        if fillColor.alphaComponent > 0 {
-            fillColor.setFill()
-            path.fill()
-        }
-
-        // Stroke
-        borderColor.setStroke()
-        path.lineWidth = borderWeight
-        path.stroke()
-
-        // Selection outline
+        if fillColor.alphaComponent > 0 { fillColor.setFill(); path.fill() }
+        borderColor.setStroke(); path.lineWidth = borderWeight; path.stroke()
         if selected {
-            let selRect = CGRect(x: r.origin.x - 4, y: r.origin.y - 4,
-                                width: r.width + 8, height: r.height + 8)
-            let selPath = NSBezierPath(rect: selRect)
+            let selPath = NSBezierPath(rect: CGRect(x: r.minX-4, y: r.minY-4,
+                                                    width: r.width+8, height: r.height+8))
             selPath.lineWidth = 1.5
             NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
-            selPath.setLineDash([5, 3], count: 2, phase: 0)
-            selPath.stroke()
+            selPath.setLineDash([5, 3], count: 2, phase: 0); selPath.stroke()
         }
     }
 
     private func drawResizeHandle(at point: CGPoint) {
         let r: CGFloat = 5
-        let rect = CGRect(x: point.x - r, y: point.y - r, width: r*2, height: r*2)
-        let circle = NSBezierPath(ovalIn: rect)
+        let circle = NSBezierPath(ovalIn: CGRect(x: point.x-r, y: point.y-r,
+                                                  width: r*2, height: r*2))
         NSColor.white.setFill(); circle.fill()
         NSColor.systemBlue.setStroke(); circle.lineWidth = 2; circle.stroke()
     }
 
     private func drawCornerHandles(for viewRect: CGRect) {
         let r = viewRect.standardized
-        drawResizeHandle(at: CGPoint(x: r.minX, y: r.minY))  // bottom-left
-        drawResizeHandle(at: CGPoint(x: r.maxX, y: r.minY))  // bottom-right
-        drawResizeHandle(at: CGPoint(x: r.minX, y: r.maxY))  // top-left
-        drawResizeHandle(at: CGPoint(x: r.maxX, y: r.maxY))  // top-right
+        drawResizeHandle(at: CGPoint(x: r.minX, y: r.minY))
+        drawResizeHandle(at: CGPoint(x: r.maxX, y: r.minY))
+        drawResizeHandle(at: CGPoint(x: r.minX, y: r.maxY))
+        drawResizeHandle(at: CGPoint(x: r.maxX, y: r.maxY))
     }
 
-    private func drawBlurRegion(_ region: BlurRegion, selected: Bool) {
-        let viewOrigin = toView(region.rect.origin)
-        let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
-                              height: region.rect.height * imageDisplayRect.height)
-        let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
-
+    private func drawBlurRegion(_ region: BlurRegion, viewRect: CGRect, selected: Bool) {
         if let image = imageProvider?(),
            let baseCG = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-
-            // Use actual CGImage pixel dimensions — may differ from image.size (points)
-            // on Retina displays where the CGImage is 2x.
-            let cgW = CGFloat(baseCG.width)
-            let cgH = CGFloat(baseCG.height)
-
-            // Pixel rect in CGImage space (y=0 at bottom).
-            let pixelRect = CGRect(
-                x: region.rect.origin.x * cgW,
-                y: region.rect.origin.y * cgH,
-                width:  region.rect.width  * cgW,
-                height: region.rect.height * cgH
-            ).standardized
-
+            let cgW = CGFloat(baseCG.width), cgH = CGFloat(baseCG.height)
+            let pixelRect = CGRect(x: region.rect.origin.x * cgW,
+                                   y: region.rect.origin.y * cgH,
+                                   width: region.rect.width * cgW,
+                                   height: region.rect.height * cgH).standardized
             if pixelRect.width > 1, pixelRect.height > 1,
-               let offCtx = CGContext(
-                   data: nil,
-                   width: Int(cgW), height: Int(cgH),
-                   bitsPerComponent: 8, bytesPerRow: 0,
-                   space: CGColorSpaceCreateDeviceRGB(),
-                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-
+               let offCtx = CGContext(data: nil, width: Int(cgW), height: Int(cgH),
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
                 offCtx.draw(baseCG, in: CGRect(x: 0, y: 0, width: cgW, height: cgH))
-
-                let ciImage = CIImage(cgImage: baseCG)
-                let ciCtx   = CIContext(cgContext: offCtx, options: nil)
-                if let filtered = blurFilter(ciImage: ciImage, pixelRect: pixelRect,
-                                             style: region.style,
+                let ciCtx = CIContext(cgContext: offCtx, options: nil)
+                if let filtered = blurFilter(ciImage: CIImage(cgImage: baseCG),
+                                             pixelRect: pixelRect, style: region.style,
                                              intensity: region.intensity,
                                              imageSize: CGSize(width: cgW, height: cgH)) {
                     ciCtx.draw(filtered, in: pixelRect, from: pixelRect)
                 }
-
                 if let resultCG = offCtx.makeImage() {
-                    // NSImage backed by CGImage uses y=0 at bottom for `from:`,
-                    // matching CGImage/CI pixel space — no flip needed.
                     let resultNS = NSImage(cgImage: resultCG,
                                           size: NSSize(width: cgW, height: cgH))
                     resultNS.draw(in: viewRect, from: pixelRect,
                                   operation: .sourceOver, fraction: 1.0)
-
                     drawBlurRegionBorder(viewRect, selected: selected)
-                    if selected {
-                        drawCornerHandles(for: viewRect)
-                    }
+                    if selected { drawCornerHandles(for: viewRect) }
                     return
                 }
             }
         }
-
         drawBlurRegionBorder(viewRect, selected: selected)
-        if selected {
-            drawCornerHandles(for: viewRect)
-        }
+        if selected { drawCornerHandles(for: viewRect) }
     }
 
     private func drawBlurRegionBorder(_ rect: CGRect, selected: Bool) {
         let path = NSBezierPath(rect: rect)
         path.lineWidth = selected ? 2 : 1.5
-        if selected {
-            NSColor.selectedControlColor.setStroke()
-        } else {
-            NSColor.white.withAlphaComponent(0.6).setStroke()
-        }
-        path.setLineDash([6, 3], count: 2, phase: 0)
-        path.stroke()
+        (selected ? NSColor.selectedControlColor
+                  : NSColor.white.withAlphaComponent(0.6)).setStroke()
+        path.setLineDash([6, 3], count: 2, phase: 0); path.stroke()
     }
 
-    private func drawHighlight(_ highlight: Highlight, selected: Bool) {
-        let viewOrigin = toView(highlight.rect.origin)
-        let viewSize = CGSize(width: highlight.rect.width * imageDisplayRect.width,
-                              height: highlight.rect.height * imageDisplayRect.height)
-        let viewRect = CGRect(origin: viewOrigin, size: viewSize).standardized
-        drawHighlightRect(viewRect, color: highlight.color, opacity: highlight.opacity, selected: selected)
+    private func drawHighlightRect(_ rect: CGRect, color: NSColor,
+                                    opacity: CGFloat, selected: Bool) {
+        color.withAlphaComponent(min(max(opacity, 0.05), 0.85)).setFill()
+        NSBezierPath(rect: rect).fill()
         if selected {
-            drawCornerHandles(for: viewRect)
-        }
-    }
-
-    private func drawHighlightRect(_ rect: CGRect, color: NSColor, opacity: CGFloat, selected: Bool) {
-        // Clamp opacity so the highlight is never fully opaque.
-        let clampedOpacity = min(max(opacity, 0.05), 0.85)
-        let fillColor = color.withAlphaComponent(clampedOpacity)
-        let path = NSBezierPath(rect: rect)
-        fillColor.setFill()
-        path.fill()
-
-        if selected {
-            let selRect = CGRect(x: rect.origin.x - 4, y: rect.origin.y - 4,
-                                width: rect.width + 8, height: rect.height + 8)
-            let selPath = NSBezierPath(rect: selRect)
+            let selPath = NSBezierPath(rect: CGRect(x: rect.minX-4, y: rect.minY-4,
+                                                    width: rect.width+8, height: rect.height+8))
             selPath.lineWidth = 1.5
             NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
-            selPath.setLineDash([5, 3], count: 2, phase: 0)
-            selPath.stroke()
+            selPath.setLineDash([5, 3], count: 2, phase: 0); selPath.stroke()
         }
     }
 
     // MARK: - Cursor
 
     override func resetCursorRects() {
+        // Base cursor for the active tool — overridden dynamically in mouseMoved.
         let cursor: NSCursor
         switch activeTool {
-        case .arrow:     cursor = .crosshair
-        case .text:      cursor = .iBeam
-        case .shape:     cursor = .crosshair
-        case .blur:      cursor = .crosshair
-        case .highlight: cursor = .crosshair
-        case .none:      cursor = .arrow
+        case .arrow, .shape, .blur, .highlight: cursor = .crosshair
+        case .text:  cursor = .iBeam
+        case .none:  cursor = .arrow
         }
         addCursorRect(bounds, cursor: cursor)
     }
 
-    // MARK: - Mouse
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
 
-    // Returns the tool type and index if the point hits any annotation,
-    // regardless of which tool is currently active.
-    private func hitTestAny(at loc: CGPoint) -> (AnnotationTool, Int)? {
-        if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) { return (.arrow, idx) }
-        if let idx = textIndex(near: loc)      { return (.text,      idx) }
-        if let idx = shapeIndex(near: loc)     { return (.shape,     idx) }
-        if let idx = blurIndex(near: loc)      { return (.blur,      idx) }
-        if let idx = highlightIndex(near: loc) { return (.highlight, idx) }
+    override func mouseMoved(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        if let cursor = resizeCursor(at: loc) {
+            cursor.set()
+        } else {
+            // Restore the tool's default cursor.
+            switch activeTool {
+            case .arrow, .shape, .blur, .highlight: NSCursor.crosshair.set()
+            case .text:  NSCursor.iBeam.set()
+            case .none:  NSCursor.arrow.set()
+            }
+        }
+    }
+
+    /// Returns the appropriate resize cursor if `pt` is over a corner handle
+    /// of any selected rect-based annotation, otherwise nil.
+    private func resizeCursor(at pt: CGPoint) -> NSCursor? {
+        // Collect all rect-based annotations that have a selected state.
+        var rects: [(CGRect, UUID)] = []
+        if let id = selectedShapeID,
+           let s = shapes.first(where: { $0.id == id }) {
+            rects.append((viewRect(for: s.rect), id))
+        }
+        if let id = selectedBlurID,
+           let r = blurRegions.first(where: { $0.id == id }) {
+            rects.append((viewRect(for: r.rect), id))
+        }
+        if let id = selectedHighlightID,
+           let h = highlights.first(where: { $0.id == id }) {
+            rects.append((viewRect(for: h.rect), id))
+        }
+
+        for (vr, _) in rects {
+            guard let corner = hitCorner(of: vr, at: pt) else { continue }
+            let r = vr.standardized
+            // Determine which diagonal the corner sits on.
+            // Top-right / bottom-left → NE-SW resize (↗)
+            // Top-left / bottom-right → NW-SE resize (↖)
+            switch corner {
+            case .topRight, .bottomLeft:
+                return nesw()
+            case .topLeft, .bottomRight:
+                return nwse()
+            }
+        }
+
+        // Also show a move cursor when hovering over any annotation body.
+        let allAnnotations: [(CGRect?)] = shapes.map { viewRect(for: $0.rect) }
+            + blurRegions.map { viewRect(for: $0.rect) }
+            + highlights.map  { viewRect(for: $0.rect) }
+        for vr in allAnnotations {
+            if let vr, vr.standardized.contains(pt) { return .openHand }
+        }
         return nil
     }
 
-    // Selects the annotation at (tool, idx) and fires onActivateTool if the
-    // tool differs from the current one.
-    private func selectAnnotation(tool: AnnotationTool, index idx: Int) {
-        switch tool {
-        case .arrow:     selectedArrowID     = arrows[idx].id
-        case .text:      selectedTextID      = textAnnotations[idx].id
-        case .shape:     selectedShapeID     = shapes[idx].id
-        case .blur:      selectedBlurID      = blurRegions[idx].id
-        case .highlight: selectedHighlightID = highlights[idx].id
-        case .none:      break
-        }
-        if tool != activeTool {
-            onActivateTool?(tool)
-        }
-        needsDisplay = true
+    /// Fallback: draw a simple diagonal arrow cursor at `angle` radians.
+    private func resizeCursorFallback(angle: CGFloat) -> NSCursor {
+        // Use the system's built-in resize cursors via private names as a last resort.
+        // In practice the named cursor lookup above should always succeed on macOS 10.15+.
+        return .arrow
     }
 
-    // Returns which corner handle of viewRect was hit by loc, or nil if none.
-    private func hitCorner(in viewRect: CGRect, at loc: CGPoint) -> ResizeCorner? {
+    // macOS doesn't expose diagonal resize cursors publicly. We load them from
+    // the system cursor bundle, which has shipped since at least macOS 10.15.
+    private func nesw() -> NSCursor {
+        // NE-SW diagonal (↗↙) — used for top-right and bottom-left corners.
+        if let c = loadSystemCursor("resizenortheastsouthwest") { return c }
+        return .resizeLeftRight   // reasonable fallback
+    }
+    private func nwse() -> NSCursor {
+        // NW-SE diagonal (↖↘) — used for top-left and bottom-right corners.
+        if let c = loadSystemCursor("resizenorthwestsoutheast") { return c }
+        return .resizeLeftRight
+    }
+    private func loadSystemCursor(_ name: String) -> NSCursor? {
+        let url = URL(fileURLWithPath:
+            "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/" +
+            "Frameworks/HIServices.framework/Versions/A/Resources/cursors/\(name)/cursor.pdf")
+        guard let img = NSImage(contentsOf: url) else { return nil }
+        img.size = NSSize(width: 16, height: 16)
+        return NSCursor(image: img, hotSpot: NSPoint(x: 8, y: 8))
+    }
+
+    // MARK: - Coordinate helpers
+    // All stored coordinates are normalized (0-1) with y=0 at the bottom of the
+    // image rect (matching Core Graphics / image pixel convention).
+    // View coordinates have y=0 at the top (NSView is not flipped here).
+
+    /// Convert a normalized image-space point to view coordinates.
+    func toView(_ norm: CGPoint) -> CGPoint {
+        let r = imageDisplayRect
+        // norm.y=0 is the bottom of the image; in view coords bottom = r.minY
+        return CGPoint(x: r.minX + norm.x * r.width,
+                       y: r.minY + norm.y * r.height)
+    }
+
+    /// Convert a view-space point to normalized image coordinates.
+    func toNorm(_ view: CGPoint) -> CGPoint {
+        let r = imageDisplayRect
+        guard r.width > 0, r.height > 0 else { return .zero }
+        return CGPoint(x: (view.x - r.minX) / r.width,
+                       y: (view.y - r.minY) / r.height)
+    }
+
+    /// Convert a normalized rect to view coordinates.
+    private func normRectToView(_ norm: CGRect) -> CGRect {
+        let origin = toView(norm.origin)
+        let r = imageDisplayRect
+        return CGRect(origin: origin,
+                      size: CGSize(width: norm.width * r.width,
+                                   height: norm.height * r.height))
+    }
+
+    /// Convert a view-space rect to normalized image coordinates.
+    private func viewRectToNorm(_ viewRect: CGRect) -> CGRect {
+        let r = imageDisplayRect
+        guard r.width > 0, r.height > 0 else { return .zero }
+        return CGRect(x: (viewRect.minX - r.minX) / r.width,
+                      y: (viewRect.minY - r.minY) / r.height,
+                      width: viewRect.width  / r.width,
+                      height: viewRect.height / r.height)
+    }
+
+    // MARK: - Hit testing
+
+    private let handleRadius: CGFloat = 8
+
+    /// Returns the arrow whose tail handle is within handleRadius of `pt`, or nil.
+    /// Checks in descending z-order so the topmost arrow wins.
+    private func hitArrowTail(at pt: CGPoint) -> UUID? {
+        for arrow in arrows.sorted(by: { $0.zOrder > $1.zOrder }) {
+            let tail = toView(arrow.start)
+            if hypot(pt.x - tail.x, pt.y - tail.y) <= handleRadius { return arrow.id }
+        }
+        return nil
+    }
+
+    /// Returns the arrow whose body is within a few points of `pt`, or nil.
+    /// Checks in descending z-order so the topmost arrow wins.
+    private func hitArrowBody(at pt: CGPoint) -> UUID? {
+        for arrow in arrows.sorted(by: { $0.zOrder > $1.zOrder }) {
+            let s = toView(arrow.start), e = toView(arrow.end)
+            let len = hypot(e.x - s.x, e.y - s.y)
+            guard len > 0 else { continue }
+            let t = ((pt.x - s.x) * (e.x - s.x) + (pt.y - s.y) * (e.y - s.y)) / (len * len)
+            let tc = max(0, min(1, t))
+            let closest = CGPoint(x: s.x + tc * (e.x - s.x), y: s.y + tc * (e.y - s.y))
+            if hypot(pt.x - closest.x, pt.y - closest.y) <= max(arrow.weight / 2 + 4, 8) {
+                return arrow.id
+            }
+        }
+        return nil
+    }
+
+    /// Returns the corner being hit for a view-space rect, or nil.
+    private func hitCorner(of viewRect: CGRect, at pt: CGPoint) -> ResizeCorner? {
         let r = viewRect.standardized
-        let hitR: CGFloat = 8  // hit radius (slightly larger than visual radius for easier grabbing)
         let corners: [(CGPoint, ResizeCorner)] = [
             (CGPoint(x: r.minX, y: r.minY), .bottomLeft),
             (CGPoint(x: r.maxX, y: r.minY), .bottomRight),
             (CGPoint(x: r.minX, y: r.maxY), .topLeft),
             (CGPoint(x: r.maxX, y: r.maxY), .topRight),
         ]
-        return corners.first(where: { hypot(loc.x - $0.0.x, loc.y - $0.0.y) <= hitR })?.1
+        for (corner, which) in corners {
+            if hypot(pt.x - corner.x, pt.y - corner.y) <= handleRadius { return which }
+        }
+        return nil
     }
 
-    // Returns the view-space point for a given corner of a view rect.
-    private func cornerPoint(of viewRect: CGRect, corner: ResizeCorner) -> CGPoint {
-        let r = viewRect.standardized
-        switch corner {
-        case .bottomLeft:  return CGPoint(x: r.minX, y: r.minY)
-        case .bottomRight: return CGPoint(x: r.maxX, y: r.minY)
-        case .topLeft:     return CGPoint(x: r.minX, y: r.maxY)
-        case .topRight:    return CGPoint(x: r.maxX, y: r.maxY)
-        }
+    private func viewRect(for normRect: CGRect) -> CGRect {
+        normRectToView(normRect)
     }
 
-    // Applies a drag delta (in normalized units) to origRect for the given corner.
-    private func applyResize(corner: ResizeCorner, origRect: CGRect,
-                             dx: CGFloat, dy: CGFloat) -> CGRect {
-        var r = origRect
-        let minSize: CGFloat = 0.02
-        switch corner {
-        case .bottomRight:
-            // Top edge is fixed; bottom edge moves with the drag.
-            // In normalized space y=0 is bottom, so origin.y is the bottom edge.
-            r.origin.y    = origRect.origin.y + dy
-            r.size.width  = max(minSize, origRect.width  + dx)
-            r.size.height = max(minSize, origRect.height - dy)
-        case .bottomLeft:
-            // Top and right edges are fixed; bottom-left corner moves.
-            let newW = max(minSize, origRect.width - dx)
-            r.origin.x    = origRect.origin.x + origRect.width - newW
-            r.size.width  = newW
-            r.origin.y    = origRect.origin.y + dy
-            r.size.height = max(minSize, origRect.height - dy)
-        case .topRight:
-            // Bottom and left edges are fixed; top-right corner moves.
-            r.size.width  = max(minSize, origRect.width  + dx)
-            r.size.height = max(minSize, origRect.height + dy)
-        case .topLeft:
-            // Bottom and right edges are fixed; top-left corner moves.
-            let newW = max(minSize, origRect.width - dx)
-            r.origin.x    = origRect.origin.x + origRect.width - newW
-            r.size.width  = newW
-            r.size.height = max(minSize, origRect.height + dy)
+    // MARK: - Universal hit-test
+
+    /// Checks all annotation types for a hit at `loc`. If found, selects the
+    /// annotation, sets up the appropriate drag state, and returns true.
+    /// Returns false if nothing was hit (caller should proceed with tool logic).
+    @discardableResult
+    private func hitTestAndStartDrag(at loc: CGPoint, clickCount: Int = 1) -> Bool {
+        // Arrow tail handle (only when an arrow is already selected).
+        if let selID = selectedArrowID, hitArrowTail(at: loc) == selID,
+           let arrow = arrows.first(where: { $0.id == selID }) {
+            dragState = .movingArrowTail(id: selID, origStart: arrow.start)
+            liveDragArrowStart = arrow.start
+            liveDragArrowEnd   = arrow.end
+            dragAnchor = loc
+            return true
         }
-        return r
+
+        // Build a unified list of all annotations sorted by descending z-order
+        // so the topmost-drawn annotation wins the hit-test.
+        enum AnyAnnotation {
+            case arrow(Arrow), text(TextAnnotation), shape(Shape)
+            case blur(BlurRegion), highlight(Highlight)
+            var zOrder: Int {
+                switch self {
+                case .arrow(let a):     return a.zOrder
+                case .text(let t):      return t.zOrder
+                case .shape(let s):     return s.zOrder
+                case .blur(let b):      return b.zOrder
+                case .highlight(let h): return h.zOrder
+                }
+            }
+        }
+        var all: [AnyAnnotation] = []
+        arrows.forEach          { all.append(.arrow($0)) }
+        textAnnotations.forEach { all.append(.text($0)) }
+        shapes.forEach          { all.append(.shape($0)) }
+        blurRegions.forEach     { all.append(.blur($0)) }
+        highlights.forEach      { all.append(.highlight($0)) }
+        all.sort { $0.zOrder > $1.zOrder }
+
+        for item in all {
+            switch item {
+            case .arrow(let arrow):
+                let s = toView(arrow.start), e = toView(arrow.end)
+                let len = hypot(e.x - s.x, e.y - s.y)
+                guard len > 0 else { continue }
+                let t = ((loc.x-s.x)*(e.x-s.x) + (loc.y-s.y)*(e.y-s.y)) / (len*len)
+                let tc = max(0, min(1, t))
+                let closest = CGPoint(x: s.x + tc*(e.x-s.x), y: s.y + tc*(e.y-s.y))
+                if hypot(loc.x-closest.x, loc.y-closest.y) <= max(arrow.weight/2+4, 8) {
+                    clearAllSelections()
+                    selectedArrowID = arrow.id
+                    dragState = .movingArrowWhole(id: arrow.id, origStart: arrow.start,
+                                                  origEnd: arrow.end, lastLoc: loc)
+                    liveDragArrowStart = arrow.start
+                    liveDragArrowEnd   = arrow.end
+                    dragAnchor = loc; needsDisplay = true
+                    notifySelection(.arrow)
+                    return true
+                }
+
+            case .text(let ann):
+                if editingID == ann.id { return false }
+                let pt = toView(ann.position)
+                let font = NSFont(name: ann.fontName, size: ann.fontSize)
+                           ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
+                let size: CGSize = ann.content.isEmpty
+                    ? CGSize(width: max(80, ann.fontSize*4), height: ann.fontSize*1.4)
+                    : makeTextAttrStr(ann.content, font: font, fontColor: ann.fontColor,
+                                      outlineColor: ann.outlineColor,
+                                      outlineWeight: ann.outlineWeight, strokeOnly: false).size()
+                let hitRect = CGRect(x: pt.x-4, y: pt.y - abs(font.descender) - 2,
+                                     width: size.width+8, height: size.height+4)
+                if hitRect.contains(loc) {
+                    clearAllSelections()
+                    if clickCount >= 2 {
+                        selectedTextID = ann.id; beginEditing(ann)
+                    } else {
+                        selectedTextID = ann.id
+                        dragState = .movingText(id: ann.id, origPos: ann.position, lastLoc: loc)
+                        dragAnchor = loc; needsDisplay = true
+                    }
+                    notifySelection(.text)
+                    return true
+                }
+
+            case .shape(let shape):
+                let vr = viewRect(for: shape.rect)
+                if let corner = hitCorner(of: vr, at: loc) {
+                    clearAllSelections()
+                    selectedShapeID = shape.id
+                    dragState = .resizingShape(id: shape.id, corner: corner,
+                                               originalRect: shape.rect)
+                    liveDragRect = vr; needsDisplay = true
+                    notifySelection(.shape)
+                    return true
+                }
+                if vr.standardized.contains(loc) {
+                    clearAllSelections()
+                    selectedShapeID = shape.id
+                    dragState = .movingShapeWhole(id: shape.id, origRect: shape.rect, lastLoc: loc)
+                    liveDragRect = vr; dragAnchor = loc; needsDisplay = true
+                    notifySelection(.shape)
+                    return true
+                }
+
+            case .blur(let region):
+                let vr = viewRect(for: region.rect)
+                if let corner = hitCorner(of: vr, at: loc) {
+                    clearAllSelections()
+                    selectedBlurID = region.id
+                    dragState = .resizingBlur(id: region.id, corner: corner,
+                                              originalRect: region.rect)
+                    liveDragRect = vr; needsDisplay = true
+                    notifySelection(.blur)
+                    return true
+                }
+                if vr.standardized.contains(loc) {
+                    clearAllSelections()
+                    selectedBlurID = region.id
+                    dragState = .movingBlurWhole(id: region.id, origRect: region.rect, lastLoc: loc)
+                    liveDragRect = vr; dragAnchor = loc; needsDisplay = true
+                    notifySelection(.blur)
+                    return true
+                }
+
+            case .highlight(let h):
+                let vr = viewRect(for: h.rect)
+                if let corner = hitCorner(of: vr, at: loc) {
+                    clearAllSelections()
+                    selectedHighlightID = h.id
+                    dragState = .resizingHighlight(id: h.id, corner: corner,
+                                                   originalRect: h.rect)
+                    liveDragRect = vr; needsDisplay = true
+                    notifySelection(.highlight)
+                    return true
+                }
+                if vr.standardized.contains(loc) {
+                    clearAllSelections()
+                    selectedHighlightID = h.id
+                    dragState = .movingHighlightWhole(id: h.id, origRect: h.rect, lastLoc: loc)
+                    liveDragRect = vr; dragAnchor = loc; needsDisplay = true
+                    notifySelection(.highlight)
+                    return true
+                }
+            }
+        }
+        return false
     }
+
+    /// Clears all selection IDs. Safe to call before setting a new selection.
+    private func clearAllSelections() {
+        selectedArrowID     = nil
+        selectedTextID      = nil
+        selectedShapeID     = nil
+        selectedBlurID      = nil
+        selectedHighlightID = nil
+    }
+
+    /// Call after setting a new selection to notify the window controller.
+    private func notifySelection(_ tool: AnnotationTool) {
+        onSelectionChanged?(tool)
+    }
+
+    // MARK: - Mouse down
 
     override func mouseDown(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
+        let imgRect = imageDisplayRect
+
+        // ── Universal hit-test: clicking any existing annotation always wins,
+        //    regardless of which tool is active. ─────────────────────────────────
+        if hitTestAndStartDrag(at: loc, clickCount: event.clickCount) { return }
+
+        // If we were editing text and clicked somewhere that didn't hit the text
+        // view, finalize the edit before proceeding.
+        if editingID != nil { finalizeEditing() }
+
+        // Clicking empty space clears all selections.
+        clearAllSelections()
+        // Only reset the toolbar highlight if no tool is currently active.
+        if activeTool == .none { notifySelection(.none) }
 
         switch activeTool {
 
+        // ── Arrow ────────────────────────────────────────────────────────────────
         case .arrow:
-            if let idx = tailIndex(near: loc) {
-                dragState = .movingArrowTail(index: idx)
-                selectedArrowID = arrows[idx].id
-            } else if let idx = arrowBodyIndex(near: loc) {
-                dragState = .movingArrowWhole(index: idx, lastLoc: loc)
-                selectedArrowID = arrows[idx].id
-            } else if let (tool, idx) = hitTestAny(at: loc) {
-                // Clicked a different annotation type — switch to it.
-                selectAnnotation(tool: tool, index: idx)
-            } else {
-                // Empty space — start a new arrow.
-                dragState = .newArrow(start: loc, current: loc)
+            // No existing annotation was hit — start a new arrow.
+            if imgRect.contains(loc) {
                 selectedArrowID = nil
+                dragState = .newArrow(start: loc, current: loc)
+                needsDisplay = true
             }
-            needsDisplay = true
 
+        // ── Text ─────────────────────────────────────────────────────────────────
         case .text:
-            let wasEditing = editingID != nil
-            _ = commitEdit()
-
-            if let idx = textIndex(near: loc) {
-                selectedTextID = textAnnotations[idx].id
-                needsDisplay = true
-                if event.clickCount >= 2 {
-                    beginEditing(index: idx)
-                } else if !wasEditing {
-                    dragState = .movingText(index: idx, lastLoc: loc)
-                }
-            } else if let (tool, idx) = hitTestAny(at: loc), tool != .text {
-                // Clicked a different annotation type — switch to it.
-                selectAnnotation(tool: tool, index: idx)
-            } else if !wasEditing {
-                // Empty space — create a new text annotation.
-                var ann = TextAnnotation(
-                    position: toNorm(loc), content: "",
-                    fontName: currentFontName,
-                    fontSize: currentFontSize,
-                    fontColor: currentFontColor,
-                    outlineColor: currentOutlineColor,
-                    outlineWeight: currentOutlineWeight
-                )
-                ann.zOrder = nextZOrder()
-                textAnnotations.append(ann)
-                selectedTextID = ann.id
-                needsDisplay = true
-                beginEditing(index: textAnnotations.count - 1)
-            } else {
-                selectedTextID = nil
-                needsDisplay = true
+            let hadSelection = selectedTextID != nil
+            // Missed all annotations (hitTestAndStartDrag returned false).
+            if editingID != nil {
+                finalizeEditing()
+            } else if hadSelection {
+                // already cleared by clearAllSelections above
+            } else if imgRect.contains(loc) {
+                let norm = toNorm(loc)
+                let newAnn = TextAnnotation(
+                    id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                    position: norm, content: "",
+                    fontName: currentFontName, fontSize: currentFontSize,
+                    fontColor: currentFontColor, outlineColor: currentOutlineColor,
+                    outlineWeight: currentOutlineWeight)
+                document?.addTextAnnotation(newAnn)
+                selectedTextID = newAnn.id
+                beginEditing(newAnn)
             }
 
+        // ── Shape ────────────────────────────────────────────────────────────────
         case .shape:
-            // Check resize handles of selected shape first.
-            if let selID = selectedShapeID,
-               let selIdx = shapes.firstIndex(where: { $0.id == selID }) {
-                let shape = shapes[selIdx]
-                let viewOrigin = toView(shape.rect.origin)
-                let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
-                                     height: shape.rect.height * imageDisplayRect.height)
-                let viewRect = CGRect(origin: viewOrigin, size: viewSize)
-                if let corner = hitCorner(in: viewRect, at: loc) {
-                    dragState = .resizingShape(index: selIdx, corner: corner, originalRect: shape.rect)
-                    needsDisplay = true
-                    break
-                }
-            }
-            if let idx = shapeIndex(near: loc) {
-                selectedShapeID = shapes[idx].id
-                dragState = .movingShapeWhole(index: idx, lastLoc: loc)
-                needsDisplay = true
-            } else if let (tool, idx) = hitTestAny(at: loc), tool != .shape {
-                // Clicked a different annotation type — switch to it.
-                selectAnnotation(tool: tool, index: idx)
-            } else {
-                // Empty space — start a new shape.
-                dragState = .newShape(start: loc, current: loc)
+            // No existing annotation hit — start a new shape.
+            if imgRect.contains(loc) {
                 selectedShapeID = nil
+                dragState = .newShape(start: loc, current: loc)
                 needsDisplay = true
             }
 
+        // ── Blur ─────────────────────────────────────────────────────────────────
         case .blur:
-            // Check resize handles of selected blur region first.
-            if let selID = selectedBlurID,
-               let selIdx = blurRegions.firstIndex(where: { $0.id == selID }) {
-                let region = blurRegions[selIdx]
-                let viewOrigin = toView(region.rect.origin)
-                let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
-                                     height: region.rect.height * imageDisplayRect.height)
-                let viewRect = CGRect(origin: viewOrigin, size: viewSize)
-                if let corner = hitCorner(in: viewRect, at: loc) {
-                    dragState = .resizingBlur(index: selIdx, corner: corner, originalRect: region.rect)
-                    needsDisplay = true
-                    break
-                }
-            }
-            if let idx = blurIndex(near: loc) {
-                selectedBlurID = blurRegions[idx].id
-                dragState = .movingBlurWhole(index: idx, lastLoc: loc)
-                needsDisplay = true
-            } else if let (tool, idx) = hitTestAny(at: loc), tool != .blur {
-                selectAnnotation(tool: tool, index: idx)
-            } else {
-                dragState = .newBlur(start: loc, current: loc)
+            // No existing annotation hit — start a new blur region.
+            if imgRect.contains(loc) {
                 selectedBlurID = nil
+                dragState = .newBlur(start: loc, current: loc)
                 needsDisplay = true
             }
 
+        // ── Highlight ────────────────────────────────────────────────────────────
         case .highlight:
-            // Check resize handles of selected highlight first.
-            if let selID = selectedHighlightID,
-               let selIdx = highlights.firstIndex(where: { $0.id == selID }) {
-                let h = highlights[selIdx]
-                let viewOrigin = toView(h.rect.origin)
-                let viewSize = CGSize(width: h.rect.width * imageDisplayRect.width,
-                                     height: h.rect.height * imageDisplayRect.height)
-                let viewRect = CGRect(origin: viewOrigin, size: viewSize)
-                if let corner = hitCorner(in: viewRect, at: loc) {
-                    dragState = .resizingHighlight(index: selIdx, corner: corner, originalRect: h.rect)
-                    needsDisplay = true
-                    break
-                }
-            }
-            if let idx = highlightIndex(near: loc) {
-                selectedHighlightID = highlights[idx].id
-                dragState = .movingHighlightWhole(index: idx, lastLoc: loc)
-                needsDisplay = true
-            } else if let (tool, idx) = hitTestAny(at: loc), tool != .highlight {
-                selectAnnotation(tool: tool, index: idx)
-            } else {
-                dragState = .newHighlight(start: loc, current: loc)
+            // No existing annotation hit — start a new highlight.
+            if imgRect.contains(loc) {
                 selectedHighlightID = nil
+                dragState = .newHighlight(start: loc, current: loc)
                 needsDisplay = true
             }
 
         case .none:
-            // No tool active — clicking any annotation activates its tool.
-            if let (tool, idx) = hitTestAny(at: loc) {
-                selectAnnotation(tool: tool, index: idx)
-            }
-            needsDisplay = true
+            break
         }
     }
+
+    // MARK: - Mouse dragged
 
     override func mouseDragged(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
+        let imgRect = imageDisplayRect
+        // Clamp to image bounds so annotations can't be dragged outside.
+        let clamped = loc.clamped(to: imgRect)
+        let shiftDown = event.modifierFlags.contains(.shift)
+
         switch dragState {
-        case .movingArrowTail(let idx):
-            arrows[idx].start = toNorm(loc); needsDisplay = true
-        case .movingArrowWhole(let idx, let last):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
-            arrows[idx].start.x += d.x; arrows[idx].start.y += d.y
-            arrows[idx].end.x   += d.x; arrows[idx].end.y   += d.y
-            dragState = .movingArrowWhole(index: idx, lastLoc: loc); needsDisplay = true
-        case .newArrow(let s, _):
-            dragState = .newArrow(start: s, current: loc); needsDisplay = true
-        case .movingText(let idx, let last):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
-            textAnnotations[idx].position.x += d.x
-            textAnnotations[idx].position.y += d.y
-            dragState = .movingText(index: idx, lastLoc: loc); needsDisplay = true
-        case .movingShapeWhole(let idx, let last):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
-            shapes[idx].rect.origin.x += d.x
-            shapes[idx].rect.origin.y += d.y
-            dragState = .movingShapeWhole(index: idx, lastLoc: loc); needsDisplay = true
-        case .newShape(let s, _):
-            let constrained = event.modifierFlags.contains(.shift)
-                ? constrainToSquare(start: s, current: loc) : loc
-            dragState = .newShape(start: s, current: constrained); needsDisplay = true
-        case .resizingShape(let idx, let corner, let origRect):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            // Compute the original corner position in view space.
-            let origViewRect = CGRect(
-                origin: toView(origRect.origin),
-                size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
-            ).standardized
-            let origCornerPt = cornerPoint(of: origViewRect, corner: corner)
-            let dx = (loc.x - origCornerPt.x) / r.width
-            let dy = (loc.y - origCornerPt.y) / r.height
-            shapes[idx].rect = applyResize(corner: corner, origRect: origRect, dx: dx, dy: dy)
-            needsDisplay = true
-        case .movingBlurWhole(let idx, let last):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
-            blurRegions[idx].rect.origin.x += d.x
-            blurRegions[idx].rect.origin.y += d.y
-            dragState = .movingBlurWhole(index: idx, lastLoc: loc); needsDisplay = true
-        case .newBlur(let s, _):
-            dragState = .newBlur(start: s, current: loc); needsDisplay = true
-        case .resizingBlur(let idx, let corner, let origRect):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let origViewRect = CGRect(
-                origin: toView(origRect.origin),
-                size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
-            ).standardized
-            let origCornerPt = cornerPoint(of: origViewRect, corner: corner)
-            let dx = (loc.x - origCornerPt.x) / r.width
-            let dy = (loc.y - origCornerPt.y) / r.height
-            blurRegions[idx].rect = applyResize(corner: corner, origRect: origRect, dx: dx, dy: dy)
-            needsDisplay = true
-        case .movingHighlightWhole(let idx, let last):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let d = CGPoint(x: (loc.x - last.x) / r.width, y: (loc.y - last.y) / r.height)
-            highlights[idx].rect.origin.x += d.x
-            highlights[idx].rect.origin.y += d.y
-            dragState = .movingHighlightWhole(index: idx, lastLoc: loc); needsDisplay = true
-        case .newHighlight(let s, _):
-            dragState = .newHighlight(start: s, current: loc); needsDisplay = true
-        case .resizingHighlight(let idx, let corner, let origRect):
-            let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
-            let origViewRect = CGRect(
-                origin: toView(origRect.origin),
-                size: CGSize(width: origRect.width * r.width, height: origRect.height * r.height)
-            ).standardized
-            let origCornerPt = cornerPoint(of: origViewRect, corner: corner)
-            let dx = (loc.x - origCornerPt.x) / r.width
-            let dy = (loc.y - origCornerPt.y) / r.height
-            highlights[idx].rect = applyResize(corner: corner, origRect: origRect, dx: dx, dy: dy)
-            needsDisplay = true
-        case .none: break
+
+        case .newArrow(let start, _):
+            var end = clamped
+            if shiftDown {
+                let dx = end.x - start.x, dy = end.y - start.y
+                if abs(dx) > abs(dy) { end.y = start.y } else { end.x = start.x }
+            }
+            dragState = .newArrow(start: start, current: end)
+
+        case .movingArrowWhole(let id, let origStart, let origEnd, let lastLoc):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            _ = lastLoc
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            liveDragArrowStart = CGPoint(x: origStart.x + totalDX, y: origStart.y + totalDY)
+            liveDragArrowEnd   = CGPoint(x: origEnd.x   + totalDX, y: origEnd.y   + totalDY)
+            dragState = .movingArrowWhole(id: id, origStart: origStart,
+                                          origEnd: origEnd, lastLoc: loc)
+
+        case .movingArrowTail(let id, let origStart):
+            _ = origStart
+            liveDragArrowStart = toNorm(clamped)
+
+        case .movingText(let id, let origPos, let lastLoc):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            _ = lastLoc
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            // Update position live for visual feedback without registering undo each tick.
+            // The document commit (with undo) happens at mouseUp.
+            liveDragTextPos = CGPoint(x: origPos.x + totalDX, y: origPos.y + totalDY)
+            dragState = .movingText(id: id, origPos: origPos, lastLoc: loc)
+
+        case .newShape(let start, _):
+            var end = clamped
+            if shiftDown {
+                let side = min(abs(end.x - start.x), abs(end.y - start.y))
+                end.x = start.x + (end.x >= start.x ? side : -side)
+                end.y = start.y + (end.y >= start.y ? side : -side)
+            }
+            dragState = .newShape(start: start, current: end)
+
+        case .movingShapeWhole(let id, let origRect, let lastLoc):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            // Accumulate total offset from the drag-start position stored in origRect,
+            // using the anchor point captured at mouseDown (lastLoc holds drag-start).
+            _ = lastLoc
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            liveDragRect = viewRect(for: newRect)
+            dragState = .movingShapeWhole(id: id, origRect: origRect, lastLoc: loc)
+
+        case .resizingShape(let id, let corner, let originalRect):
+            liveDragRect = resizedViewRect(originalRect: originalRect, corner: corner,
+                                           currentLoc: clamped, shift: shiftDown)
+
+        case .newBlur(let start, _):
+            var end = clamped
+            if shiftDown {
+                let side = min(abs(end.x - start.x), abs(end.y - start.y))
+                end.x = start.x + (end.x >= start.x ? side : -side)
+                end.y = start.y + (end.y >= start.y ? side : -side)
+            }
+            dragState = .newBlur(start: start, current: end)
+
+        case .movingBlurWhole(let id, let origRect, let lastLoc):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            _ = lastLoc
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            liveDragRect = viewRect(for: newRect)
+            dragState = .movingBlurWhole(id: id, origRect: origRect, lastLoc: loc)
+
+        case .resizingBlur(let id, let corner, let originalRect):
+            liveDragRect = resizedViewRect(originalRect: originalRect, corner: corner,
+                                           currentLoc: clamped, shift: shiftDown)
+
+        case .newHighlight(let start, _):
+            var end = clamped
+            if shiftDown {
+                let side = min(abs(end.x - start.x), abs(end.y - start.y))
+                end.x = start.x + (end.x >= start.x ? side : -side)
+                end.y = start.y + (end.y >= start.y ? side : -side)
+            }
+            dragState = .newHighlight(start: start, current: end)
+
+        case .movingHighlightWhole(let id, let origRect, let lastLoc):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            _ = lastLoc
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            liveDragRect = viewRect(for: newRect)
+            dragState = .movingHighlightWhole(id: id, origRect: origRect, lastLoc: loc)
+
+        case .resizingHighlight(let id, let corner, let originalRect):
+            liveDragRect = resizedViewRect(originalRect: originalRect, corner: corner,
+                                           currentLoc: clamped, shift: shiftDown)
+
+        case .none:
+            break
         }
+        needsDisplay = true
     }
+
+    /// Compute the new view-space rect while resizing a corner handle.
+    private func resizedViewRect(originalRect: CGRect, corner: ResizeCorner,
+                                  currentLoc: CGPoint, shift: Bool) -> CGRect {
+        let orig = viewRect(for: originalRect)
+        var minX = orig.minX, minY = orig.minY
+        var maxX = orig.maxX, maxY = orig.maxY
+        switch corner {
+        case .bottomLeft:  minX = currentLoc.x; minY = currentLoc.y
+        case .bottomRight: maxX = currentLoc.x; minY = currentLoc.y
+        case .topLeft:     minX = currentLoc.x; maxY = currentLoc.y
+        case .topRight:    maxX = currentLoc.x; maxY = currentLoc.y
+        }
+        if shift {
+            let w = abs(maxX - minX), h = abs(maxY - minY)
+            let side = min(w, h)
+            switch corner {
+            case .bottomLeft:  minX = maxX - side; minY = maxY - side
+            case .bottomRight: maxX = minX + side; minY = maxY - side
+            case .topLeft:     minX = maxX - side; maxY = minY + side
+            case .topRight:    maxX = minX + side; maxY = minY + side
+            }
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    // MARK: - Mouse up
 
     override func mouseUp(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
+        let clamped = loc.clamped(to: imageDisplayRect)
+
         switch dragState {
-        case .newArrow(let s, let c):
-            if hypot(c.x - s.x, c.y - s.y) > 8 {
-                var a = Arrow(start: toNorm(s), end: toNorm(c),
-                              weight: currentWeight, color: currentColor)
-                a.zOrder = nextZOrder()
-                arrows.append(a); selectedArrowID = a.id; onChange?()
-            } else {
-                selectedArrowID = nil
+
+        case .newArrow(let start, let current):
+            let s = toNorm(start), e = toNorm(current)
+            if hypot(e.x - s.x, e.y - s.y) > 0.005 {
+                let arrow = Arrow(id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                                  start: s, end: e,
+                                  weight: currentWeight, color: currentColor)
+                document?.addArrow(arrow)
+                selectedArrowID = arrow.id
             }
-        case .newShape(let s, let c):
-            let size = CGSize(width: c.x - s.x, height: c.y - s.y)
-            if abs(size.width) > 8 || abs(size.height) > 8 {
-                var rect = CGRect(origin: s, size: size)
-                rect = rect.standardized
-                let normOrigin = toNorm(rect.origin)
-                let normRect = CGRect(x: normOrigin.x,
-                                     y: normOrigin.y,
-                                     width: rect.size.width / imageDisplayRect.width,
-                                     height: rect.size.height / imageDisplayRect.height)
-                var shape = Shape(rect: normRect, shapeType: currentShapeType,
-                                 borderWeight: currentBorderWeight,
-                                 borderColor: currentBorderColor,
-                                 fillColor: currentFillColor)
-                shape.zOrder = nextZOrder()
-                shapes.append(shape); selectedShapeID = shape.id; onChange?()
-            } else {
-                selectedShapeID = nil
+
+        case .movingArrowWhole(let id, let origStart, let origEnd, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            document?.updateArrow(id: id,
+                start: CGPoint(x: origStart.x + totalDX, y: origStart.y + totalDY),
+                end:   CGPoint(x: origEnd.x   + totalDX, y: origEnd.y   + totalDY))
+
+        case .movingArrowTail(let id, _):
+            if let ls = liveDragArrowStart, let le = liveDragArrowEnd {
+                document?.updateArrow(id: id, start: ls, end: le)
             }
-        case .newBlur(let s, let c):
-            let size = CGSize(width: c.x - s.x, height: c.y - s.y)
-            if abs(size.width) > 8 || abs(size.height) > 8 {
-                var rect = CGRect(origin: s, size: size)
-                rect = rect.standardized
-                let normOrigin = toNorm(rect.origin)
-                let normRect = CGRect(x: normOrigin.x,
-                                     y: normOrigin.y,
-                                     width: rect.size.width / imageDisplayRect.width,
-                                     height: rect.size.height / imageDisplayRect.height)
-                var region = BlurRegion(rect: normRect,
-                                        intensity: currentBlurIntensity,
+
+        case .movingText(let id, let origPos, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            let newPos = CGPoint(x: origPos.x + totalDX, y: origPos.y + totalDY)
+            document?.updateTextAnnotation(id: id, position: newPos)
+
+        case .newShape(let start, let current):
+            let normRect = viewRectToNorm(
+                CGRect(origin: start,
+                       size: CGSize(width: current.x - start.x,
+                                    height: current.y - start.y)).standardized)
+            if normRect.width > 0.005, normRect.height > 0.005 {
+                let shape = Shape(id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                                  rect: normRect, shapeType: currentShapeType,
+                                  borderWeight: currentBorderWeight,
+                                  borderColor: currentBorderColor,
+                                  fillColor: currentFillColor)
+                document?.addShape(shape)
+                selectedShapeID = shape.id
+            }
+
+        case .movingShapeWhole(let id, let origRect, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            document?.updateShape(id: id, rect: newRect)
+
+        case .resizingShape(let id, _, _):
+            if let lr = liveDragRect {
+                document?.updateShape(id: id, rect: viewRectToNorm(lr.standardized))
+            }
+
+        case .newBlur(let start, let current):
+            let normRect = viewRectToNorm(
+                CGRect(origin: start,
+                       size: CGSize(width: current.x - start.x,
+                                    height: current.y - start.y)).standardized)
+            if normRect.width > 0.005, normRect.height > 0.005 {
+                let region = BlurRegion(id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                                        rect: normRect, intensity: currentBlurIntensity,
                                         style: currentBlurStyle)
-                region.zOrder = nextZOrder()
-                blurRegions.append(region); selectedBlurID = region.id; onChange?()
-            } else {
-                selectedBlurID = nil
+                document?.addBlurRegion(region)
+                selectedBlurID = region.id
             }
-        case .newHighlight(let s, let c):
-            let size = CGSize(width: c.x - s.x, height: c.y - s.y)
-            if abs(size.width) > 8 || abs(size.height) > 8 {
-                var rect = CGRect(origin: s, size: size)
-                rect = rect.standardized
-                let normOrigin = toNorm(rect.origin)
-                let normRect = CGRect(x: normOrigin.x,
-                                     y: normOrigin.y,
-                                     width: rect.size.width / imageDisplayRect.width,
-                                     height: rect.size.height / imageDisplayRect.height)
-                var h = Highlight(rect: normRect,
-                                  color: currentHighlightColor,
+
+        case .movingBlurWhole(let id, let origRect, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            document?.updateBlurRegion(id: id, rect: newRect)
+
+        case .resizingBlur(let id, _, _):
+            if let lr = liveDragRect {
+                document?.updateBlurRegion(id: id, rect: viewRectToNorm(lr.standardized))
+            }
+
+        case .newHighlight(let start, let current):
+            let normRect = viewRectToNorm(
+                CGRect(origin: start,
+                       size: CGSize(width: current.x - start.x,
+                                    height: current.y - start.y)).standardized)
+            if normRect.width > 0.005, normRect.height > 0.005 {
+                let h = Highlight(id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                                  rect: normRect, color: currentHighlightColor,
                                   opacity: currentHighlightOpacity)
-                h.zOrder = nextZOrder()
-                highlights.append(h); selectedHighlightID = h.id; onChange?()
-            } else {
-                selectedHighlightID = nil
+                document?.addHighlight(h)
+                selectedHighlightID = h.id
             }
-        case .movingArrowTail, .movingArrowWhole, .movingText, .movingShapeWhole, .resizingShape,
-             .movingBlurWhole, .resizingBlur, .movingHighlightWhole, .resizingHighlight:
-            onChange?()
-        case .none: break
-        }
-        dragState = .none; needsDisplay = true; _ = loc
-    }
 
-    // MARK: - Inline text editing
+        case .movingHighlightWhole(let id, let origRect, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            document?.updateHighlight(id: id, rect: newRect)
 
-    private func beginEditing(index: Int) {
-        guard index < textAnnotations.count else { return }
-        let ann  = textAnnotations[index]
-        let pt   = toView(ann.position)
-        let font = NSFont(name: ann.fontName, size: ann.fontSize) ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
-
-        // Initial width: enough for ~12 chars or the existing content, whichever is wider.
-        let minW: CGFloat = max(160, ann.fontSize * 8)
-        let contentW = ann.content.isEmpty ? 0 :
-            NSAttributedString(string: ann.content, attributes: [.font: font]).size().width
-        let initW = max(minW, contentW + 32)
-
-        // Build a borderless NSTextView inside a scroll view so text wraps freely.
-        let textView = NSTextView(frame: CGRect(x: 0, y: 0, width: initW, height: ann.fontSize * 1.6))
-        textView.font                  = font
-        textView.textColor             = .labelColor
-        textView.backgroundColor       = NSColor.windowBackgroundColor.withAlphaComponent(0.85)
-        textView.isEditable            = true
-        textView.isRichText            = false
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView  = true
-        textView.textContainer?.heightTracksTextView = false
-        textView.textContainer?.lineFragmentPadding  = 4
-        textView.textContainerInset = NSSize(width: 4, height: 4)
-        textView.string = ann.content
-        textView.delegate = self
-
-        // Wrap in a scroll view so the container clips properly.
-        let scrollView = NSScrollView(frame: CGRect(x: pt.x, y: pt.y,
-                                                    width: initW,
-                                                    height: ann.fontSize * 1.6 + 8))
-        scrollView.documentView        = textView
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers  = true
-        scrollView.borderType          = .bezelBorder
-        scrollView.wantsLayer          = true
-        scrollView.layer?.cornerRadius = 4
-
-        addSubview(scrollView)
-        editingScrollView = scrollView
-        editingTextView   = textView
-        editingID         = ann.id
-
-        window?.makeFirstResponder(textView)
-        textView.selectAll(nil)
-
-        // Size to fit existing content immediately.
-        resizeEditingView()
-    }
-
-    /// Resize the editing scroll view to wrap all current text content.
-    private func resizeEditingView() {
-        guard let sv = editingScrollView, let tv = editingTextView, let id = editingID,
-              let ann = textAnnotations.first(where: { $0.id == id }) else { return }
-
-        let font   = tv.font ?? NSFont(name: ann.fontName, size: ann.fontSize) ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
-        let lineH  = font.ascender - font.descender + font.leading
-        let inset  = tv.textContainerInset
-        let padding = tv.textContainer?.lineFragmentPadding ?? 4
-
-        // Measure the natural size of the text.
-        tv.layoutManager?.ensureLayout(for: tv.textContainer!)
-        let usedRect = tv.layoutManager?.usedRect(for: tv.textContainer!) ?? .zero
-
-        let newW = max(160, usedRect.width + padding * 2 + inset.width * 2 + 8)
-        let newH = max(lineH + inset.height * 2 + 8, usedRect.height + inset.height * 2 + 8)
-
-        let pt = toView(ann.position)
-        sv.frame = CGRect(x: pt.x, y: pt.y, width: newW, height: newH)
-        tv.frame = CGRect(x: 0, y: 0, width: newW - 4, height: newH - 4)
-        tv.textContainer?.containerSize = CGSize(width: newW - 4, height: CGFloat.greatestFiniteMagnitude)
-    }
-
-    @discardableResult
-    private func commitEdit() -> Bool {
-        guard let sv = editingScrollView, let tv = editingTextView, let id = editingID else { return false }
-        editingScrollView = nil
-        editingTextView = nil
-        editingID = nil
-        let text = tv.string
-        sv.removeFromSuperview()
-        if let idx = textAnnotations.firstIndex(where: { $0.id == id }) {
-            if text.isEmpty {
-                textAnnotations.remove(at: idx)
-                selectedTextID = nil
-            } else {
-                textAnnotations[idx].content = text
+        case .resizingHighlight(let id, _, _):
+            if let lr = liveDragRect {
+                document?.updateHighlight(id: id, rect: viewRectToNorm(lr.standardized))
             }
-            onChange?()
+
+        case .none:
+            break
         }
+
+        dragState = .none
+        liveDragArrowStart = nil
+        liveDragArrowEnd   = nil
+        liveDragRect       = nil
+        liveDragTextPos    = nil
         needsDisplay = true
-        return true
-    }
-
-    // Called before copy/save so the export captures any in-progress edit.
-    func finalizeEditing() { _ = commitEdit() }
-
-    private func finalizeShape() {
-        selectedShapeID = nil
+        // Restore default cursor after drag ends.
+        window?.invalidateCursorRects(for: self)
     }
 
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
-        guard event.keyCode == 51 || event.keyCode == 117 else {
-            super.keyDown(with: event); return
+        // Delete / Backspace — remove selected annotation.
+        if event.keyCode == 51 || event.keyCode == 117 {
+            deleteSelected(); return
         }
-        if activeTool == .arrow, let id = selectedArrowID {
-            arrows.removeAll { $0.id == id }
-            selectedArrowID = nil
-            needsDisplay = true; onChange?()
-        } else if activeTool == .text, let id = selectedTextID, editingID == nil {
-            textAnnotations.removeAll { $0.id == id }
-            selectedTextID = nil
-            needsDisplay = true; onChange?()
-        } else if activeTool == .shape, let id = selectedShapeID {
-            shapes.removeAll { $0.id == id }
-            selectedShapeID = nil
-            needsDisplay = true; onChange?()
-        } else if activeTool == .blur, let id = selectedBlurID {
-            blurRegions.removeAll { $0.id == id }
-            selectedBlurID = nil
-            needsDisplay = true; onChange?()
-        } else if activeTool == .highlight, let id = selectedHighlightID {
-            highlights.removeAll { $0.id == id }
-            selectedHighlightID = nil
-            needsDisplay = true; onChange?()
-        } else {
-            super.keyDown(with: event)
+        // Escape — deselect / cancel drag.
+        if event.keyCode == 53 {
+            dragState = .none
+            liveDragArrowStart = nil; liveDragArrowEnd = nil; liveDragRect = nil
+            selectedArrowID = nil; selectedTextID = nil
+            selectedShapeID = nil; selectedBlurID = nil; selectedHighlightID = nil
+            needsDisplay = true; return
         }
+        super.keyDown(with: event)
+    }
+
+    private func deleteSelected() {
+        if let id = selectedArrowID     { document?.removeArrow(id: id);          selectedArrowID = nil }
+        if let id = selectedTextID      { document?.removeTextAnnotation(id: id); selectedTextID  = nil }
+        if let id = selectedShapeID     { document?.removeShape(id: id);          selectedShapeID = nil }
+        if let id = selectedBlurID      { document?.removeBlurRegion(id: id);     selectedBlurID  = nil }
+        if let id = selectedHighlightID { document?.removeHighlight(id: id);      selectedHighlightID = nil }
+        needsDisplay = true
     }
 
     // MARK: - Context menu
@@ -1060,396 +1229,270 @@ class AnnotationOverlay: NSView {
         let loc = convert(event.locationInWindow, from: nil)
         let menu = NSMenu()
 
-        // Determine what was right-clicked.
-        enum HitItem {
-            case arrow(UUID)
-            case text(UUID)
-            case shape(UUID)
-            case blur(UUID)
-            case highlight(UUID)
+        // Arrow hit?
+        if let id = hitArrowBody(at: loc) ?? hitArrowTail(at: loc) {
+            selectedArrowID = id; needsDisplay = true
+            let del = NSMenuItem(title: "Delete Arrow", action: #selector(deleteSelectedItem(_:)),
+                                 keyEquivalent: "")
+            del.target = self; menu.addItem(del)
+            addArrangeItems(to: menu)
+            return menu
         }
-        var hit: HitItem?
-        if let idx = tailIndex(near: loc) ?? arrowBodyIndex(near: loc) {
-            hit = .arrow(arrows[idx].id)
-        } else if let idx = textIndex(near: loc) {
-            hit = .text(textAnnotations[idx].id)
-        } else if let idx = shapeIndex(near: loc) {
-            hit = .shape(shapes[idx].id)
-        } else if let idx = blurIndex(near: loc) {
-            hit = .blur(blurRegions[idx].id)
-        } else if let idx = highlightIndex(near: loc) {
-            hit = .highlight(highlights[idx].id)
-        }
-
-        if let hit {
-            let id: UUID
-            let deleteTitle: String
-            switch hit {
-            case .arrow(let u):     id = u; deleteTitle = "Delete Arrow"
-            case .text(let u):      id = u; deleteTitle = "Delete Text"
-            case .shape(let u):     id = u; deleteTitle = "Delete Shape"
-            case .blur(let u):      id = u; deleteTitle = "Delete Blur"
-            case .highlight(let u): id = u; deleteTitle = "Delete Highlight"
+        // Text hit?
+        for ann in textAnnotations.reversed() {
+            let pt = toView(ann.position)
+            let font = NSFont(name: ann.fontName, size: ann.fontSize)
+                       ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
+            let size: CGSize = ann.content.isEmpty
+                ? CGSize(width: max(80, ann.fontSize * 4), height: ann.fontSize * 1.4)
+                : makeTextAttrStr(ann.content, font: font, fontColor: ann.fontColor,
+                                  outlineColor: ann.outlineColor,
+                                  outlineWeight: ann.outlineWeight, strokeOnly: false).size()
+            let hitRect = CGRect(x: pt.x-4, y: pt.y - abs(font.descender) - 2,
+                                 width: size.width+8, height: size.height+4)
+            if hitRect.contains(loc) {
+                selectedTextID = ann.id; needsDisplay = true
+                let edit = NSMenuItem(title: "Edit Text", action: #selector(editSelectedText(_:)),
+                                      keyEquivalent: "")
+                edit.target = self; menu.addItem(edit)
+                let del = NSMenuItem(title: "Delete Text", action: #selector(deleteSelectedItem(_:)),
+                                     keyEquivalent: "")
+                del.target = self; menu.addItem(del)
+                addArrangeItems(to: menu)
+                return menu
             }
-
-            // Layering submenu
-            let layerMenu = NSMenu(title: "Arrange")
-            func layerItem(_ title: String, _ sel: Selector) -> NSMenuItem {
-                let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
-                item.target = self; item.representedObject = id; return item
-            }
-            layerMenu.addItem(layerItem("Bring to Front",  #selector(menuBringToFront(_:))))
-            layerMenu.addItem(layerItem("Bring Forward",   #selector(menuBringForward(_:))))
-            layerMenu.addItem(layerItem("Send Backward",   #selector(menuSendBackward(_:))))
-            layerMenu.addItem(layerItem("Send to Back",    #selector(menuSendToBack(_:))))
-
-            let arrangeItem = NSMenuItem(title: "Arrange", action: nil, keyEquivalent: "")
-            arrangeItem.submenu = layerMenu
-            menu.addItem(arrangeItem)
-            menu.addItem(.separator())
-
-            let del = menu.addItem(withTitle: deleteTitle, action: #selector(menuDeleteAny(_:)), keyEquivalent: "")
-            del.target = self; del.representedObject = id
-            menu.addItem(.separator())
         }
-
-        let copy = menu.addItem(withTitle: "Copy Image", action: #selector(menuCopy(_:)), keyEquivalent: "")
-        copy.target = self
+        // Shape / blur / highlight hit?
+        for shape in shapes.sorted(by: { $0.zOrder > $1.zOrder }) {
+            if viewRect(for: shape.rect).standardized.contains(loc) {
+                selectedShapeID = shape.id; needsDisplay = true
+                let del = NSMenuItem(title: "Delete Shape", action: #selector(deleteSelectedItem(_:)),
+                                     keyEquivalent: "")
+                del.target = self; menu.addItem(del)
+                addArrangeItems(to: menu)
+                return menu
+            }
+        }
+        for region in blurRegions.sorted(by: { $0.zOrder > $1.zOrder }) {
+            if viewRect(for: region.rect).standardized.contains(loc) {
+                selectedBlurID = region.id; needsDisplay = true
+                let del = NSMenuItem(title: "Delete Blur", action: #selector(deleteSelectedItem(_:)),
+                                     keyEquivalent: "")
+                del.target = self; menu.addItem(del)
+                addArrangeItems(to: menu)
+                return menu
+            }
+        }
+        for h in highlights.sorted(by: { $0.zOrder > $1.zOrder }) {
+            if viewRect(for: h.rect).standardized.contains(loc) {
+                selectedHighlightID = h.id; needsDisplay = true
+                let del = NSMenuItem(title: "Delete Highlight", action: #selector(deleteSelectedItem(_:)),
+                                     keyEquivalent: "")
+                del.target = self; menu.addItem(del)
+                addArrangeItems(to: menu)
+                return menu
+            }
+        }
+        // Generic copy option.
+        let copy = NSMenuItem(title: "Copy Image", action: #selector(copyImageAction(_:)),
+                              keyEquivalent: "")
+        copy.target = self; menu.addItem(copy)
         return menu
     }
 
-    // MARK: Layering helpers
-
-    // Returns the current zOrder for any annotation ID.
-    private func zOrder(for id: UUID) -> Int? {
-        if let a = arrows.first(where: { $0.id == id })            { return a.zOrder }
-        if let t = textAnnotations.first(where: { $0.id == id })   { return t.zOrder }
-        if let s = shapes.first(where: { $0.id == id })            { return s.zOrder }
-        if let b = blurRegions.first(where: { $0.id == id })       { return b.zOrder }
-        if let h = highlights.first(where: { $0.id == id })        { return h.zOrder }
-        return nil
-    }
-
-    private func setZOrder(_ z: Int, for id: UUID) {
-        if let i = arrows.firstIndex(where: { $0.id == id })          { arrows[i].zOrder = z }
-        if let i = textAnnotations.firstIndex(where: { $0.id == id }) { textAnnotations[i].zOrder = z }
-        if let i = shapes.firstIndex(where: { $0.id == id })          { shapes[i].zOrder = z }
-        if let i = blurRegions.firstIndex(where: { $0.id == id })     { blurRegions[i].zOrder = z }
-        if let i = highlights.firstIndex(where: { $0.id == id })      { highlights[i].zOrder = z }
-    }
-
-    private func allZOrders() -> [(id: UUID, z: Int)] {
-        var all: [(UUID, Int)] = []
-        arrows.forEach          { all.append(($0.id, $0.zOrder)) }
-        textAnnotations.forEach { all.append(($0.id, $0.zOrder)) }
-        shapes.forEach          { all.append(($0.id, $0.zOrder)) }
-        blurRegions.forEach     { all.append(($0.id, $0.zOrder)) }
-        highlights.forEach      { all.append(($0.id, $0.zOrder)) }
-        return all.sorted { $0.1 < $1.1 }
-    }
-
-    // Renormalises all z-orders to 1…n to keep them tidy after reordering.
-    private func compactZOrders() {
-        let sorted = allZOrders()
-        for (rank, item) in sorted.enumerated() {
-            setZOrder(rank + 1, for: item.id)
-        }
-        zOrderCounter = sorted.count
-    }
-
-    @objc private func menuBringToFront(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID else { return }
-        compactZOrders()
-        setZOrder(zOrderCounter + 1, for: id)
-        compactZOrders()
-        needsDisplay = true; onChange?()
-    }
-
-    @objc private func menuSendToBack(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID else { return }
-        compactZOrders()
-        setZOrder(0, for: id)
-        compactZOrders()
-        needsDisplay = true; onChange?()
-    }
-
-    @objc private func menuBringForward(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID,
-              let currentZ = zOrder(for: id) else { return }
-        // Find the next item above and swap z-orders.
-        let sorted = allZOrders()
-        if let next = sorted.first(where: { $0.z > currentZ }) {
-            setZOrder(next.z, for: id)
-            setZOrder(currentZ, for: next.id)
-        }
-        needsDisplay = true; onChange?()
-    }
-
-    @objc private func menuSendBackward(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID,
-              let currentZ = zOrder(for: id) else { return }
-        // Find the next item below and swap z-orders.
-        let sorted = allZOrders()
-        if let prev = sorted.last(where: { $0.z < currentZ }) {
-            setZOrder(prev.z, for: id)
-            setZOrder(currentZ, for: prev.id)
-        }
-        needsDisplay = true; onChange?()
-    }
-
-    @objc private func menuDeleteAny(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID else { return }
-        arrows.removeAll          { $0.id == id }
-        textAnnotations.removeAll { $0.id == id }
-        shapes.removeAll          { $0.id == id }
-        blurRegions.removeAll     { $0.id == id }
-        highlights.removeAll      { $0.id == id }
-        if selectedArrowID     == id { selectedArrowID     = nil }
-        if selectedTextID      == id { selectedTextID      = nil }
-        if selectedShapeID     == id { selectedShapeID     = nil }
-        if selectedBlurID      == id { selectedBlurID      = nil }
-        if selectedHighlightID == id { selectedHighlightID = nil }
-        needsDisplay = true; onChange?()
-    }
-
-    @objc private func menuCopy(_ item: NSMenuItem) { onCopy?() }
-
-    // MARK: - Update selected arrow
-
-    func updateSelected(weight: CGFloat? = nil, color: NSColor? = nil) {
-        guard let id = selectedArrowID,
-              let idx = arrows.firstIndex(where: { $0.id == id }) else { return }
-        if let w = weight { arrows[idx].weight = w }
-        if let c = color  { arrows[idx].color  = c }
-        needsDisplay = true
-    }
-
-    // MARK: - Update selected text
-
-    func updateSelectedText(fontName: String? = nil,
-                            fontSize: CGFloat? = nil,
-                            fontColor: NSColor? = nil,
-                            outlineColor: NSColor? = nil,
-                            outlineWeight: CGFloat? = nil) {
+    @objc private func deleteSelectedItem(_ sender: Any?) { deleteSelected() }
+    @objc private func copyImageAction(_ sender: Any?)    { onCopy?() }
+    @objc private func editSelectedText(_ sender: Any?) {
         guard let id = selectedTextID,
-              let idx = textAnnotations.firstIndex(where: { $0.id == id }) else { return }
-        if let v = fontName      { textAnnotations[idx].fontName      = v }
-        if let v = fontSize      { textAnnotations[idx].fontSize      = v }
-        if let v = fontColor     { textAnnotations[idx].fontColor     = v }
-        if let v = outlineColor  { textAnnotations[idx].outlineColor  = v }
-        if let v = outlineWeight { textAnnotations[idx].outlineWeight = v }
-        if let tv = editingTextView, editingID == id {
-            if let name = fontName, let size = fontSize {
-                tv.font = NSFont(name: name, size: size) ?? NSFont.boldSystemFont(ofSize: size)
-            } else if let name = fontName {
-                let size = textAnnotations[idx].fontSize
-                tv.font = NSFont(name: name, size: size) ?? NSFont.boldSystemFont(ofSize: size)
-            } else if let size = fontSize {
-                let name = textAnnotations[idx].fontName
-                tv.font = NSFont(name: name, size: size) ?? NSFont.boldSystemFont(ofSize: size)
-            }
-            if let v = fontColor { tv.textColor = v }
-            resizeEditingView()
+              let ann = textAnnotations.first(where: { $0.id == id }) else { return }
+        beginEditing(ann)
+    }
+
+    // MARK: - Z-order actions
+
+    private func selectedAnnotationID() -> UUID? {
+        selectedArrowID ?? selectedTextID ?? selectedShapeID
+            ?? selectedBlurID ?? selectedHighlightID
+    }
+
+    private func addArrangeItems(to menu: NSMenu) {
+        menu.addItem(.separator())
+        let fwd  = NSMenuItem(title: "Bring Forward",  action: #selector(bringForward(_:)),  keyEquivalent: "")
+        let back = NSMenuItem(title: "Send Backward",  action: #selector(sendBackward(_:)),  keyEquivalent: "")
+        let top  = NSMenuItem(title: "Bring to Front", action: #selector(bringToFront(_:)),  keyEquivalent: "")
+        let bot  = NSMenuItem(title: "Send to Back",   action: #selector(sendToBack(_:)),    keyEquivalent: "")
+        for item in [fwd, back, top, bot] { item.target = self; menu.addItem(item) }
+    }
+
+    @objc private func bringForward(_ sender: Any?) {
+        guard let id = selectedAnnotationID(), let doc = document else { return }
+        var pairs = doc.allZOrderPairs()
+        guard let idx = pairs.firstIndex(where: { $0.id == id }), idx < pairs.count - 1 else { return }
+        pairs.swapAt(idx, idx + 1)
+        doc.setZOrders(pairs.enumerated().map { (id: $0.element.id, z: $0.offset) })
+    }
+
+    @objc private func sendBackward(_ sender: Any?) {
+        guard let id = selectedAnnotationID(), let doc = document else { return }
+        var pairs = doc.allZOrderPairs()
+        guard let idx = pairs.firstIndex(where: { $0.id == id }), idx > 0 else { return }
+        pairs.swapAt(idx, idx - 1)
+        doc.setZOrders(pairs.enumerated().map { (id: $0.element.id, z: $0.offset) })
+    }
+
+    @objc private func bringToFront(_ sender: Any?) {
+        guard let id = selectedAnnotationID(), let doc = document else { return }
+        var pairs = doc.allZOrderPairs()
+        guard let idx = pairs.firstIndex(where: { $0.id == id }) else { return }
+        let item = pairs.remove(at: idx)
+        pairs.append(item)
+        doc.setZOrders(pairs.enumerated().map { (id: $0.element.id, z: $0.offset) })
+    }
+
+    @objc private func sendToBack(_ sender: Any?) {
+        guard let id = selectedAnnotationID(), let doc = document else { return }
+        var pairs = doc.allZOrderPairs()
+        guard let idx = pairs.firstIndex(where: { $0.id == id }) else { return }
+        let item = pairs.remove(at: idx)
+        pairs.insert(item, at: 0)
+        doc.setZOrders(pairs.enumerated().map { (id: $0.element.id, z: $0.offset) })
+    }
+
+    // MARK: - Inline text editing
+
+    func beginEditing(_ ann: TextAnnotation) {
+        finalizeEditing()
+        editingID = ann.id
+
+        let pt = toView(ann.position)
+        let font = NSFont(name: ann.fontName, size: ann.fontSize)
+                   ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
+
+        let tv = EscapableTextView(frame: CGRect(x: pt.x, y: pt.y - ann.fontSize * 0.2,
+                                                  width: max(120, ann.fontSize * 8),
+                                                  height: ann.fontSize * 2))
+        tv.onEscape = { [weak self] in self?.finalizeEditing() }
+        tv.font = font
+        tv.textColor = ann.fontColor
+        tv.backgroundColor = NSColor.black.withAlphaComponent(0.15)
+        tv.isRichText = false
+        tv.isEditable = true
+        tv.isSelectable = true
+        tv.drawsBackground = true
+        tv.allowsUndo = false   // let the document's undo manager handle it
+        tv.string = ann.content
+        tv.selectAll(nil)
+
+        let sv = NSScrollView(frame: tv.frame)
+        sv.documentView = tv
+        sv.hasVerticalScroller = false
+        sv.hasHorizontalScroller = false
+        sv.drawsBackground = false
+        sv.borderType = .noBorder
+        addSubview(sv)
+
+        editingScrollView = sv
+        editingTextView   = tv
+        window?.makeFirstResponder(tv)
+        needsDisplay = true
+    }
+
+    func finalizeEditing() {
+        guard let id = editingID, let tv = editingTextView else { return }
+        let content = tv.string
+        document?.updateTextAnnotation(id: id, content: content)
+        // Remove empty annotations that were never given content.
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            document?.removeTextAnnotation(id: id)
+            if selectedTextID == id { selectedTextID = nil }
         }
+        editingScrollView?.removeFromSuperview()
+        editingScrollView = nil
+        editingTextView   = nil
+        editingID         = nil
+        window?.makeFirstResponder(self)
         needsDisplay = true
     }
 
-    // MARK: - Update selected shape
+    // MARK: - updateSelected* (called by EditorWindowController sidebar actions)
 
-    func updateSelectedShape(shapeType: ShapeType? = nil,
-                             borderWeight: CGFloat? = nil,
-                             borderColor: NSColor? = nil,
-                             fillColor: NSColor? = nil) {
-        guard let id = selectedShapeID,
-              let idx = shapes.firstIndex(where: { $0.id == id }) else { return }
-        if let v = shapeType     { shapes[idx].shapeType     = v }
-        if let v = borderWeight  { shapes[idx].borderWeight  = v }
-        if let v = borderColor   { shapes[idx].borderColor   = v }
-        if let v = fillColor     { shapes[idx].fillColor     = v }
-        needsDisplay = true
+    /// Update the currently selected arrow's weight and/or color.
+    func updateSelected(weight: CGFloat? = nil, color: NSColor? = nil) {
+        guard let id = selectedArrowID else { return }
+        document?.updateArrow(id: id, weight: weight, color: color)
     }
 
-    // MARK: - Update selected blur
+    /// Update the currently selected text annotation's properties.
+    func updateSelectedText(fontName: String? = nil, fontSize: CGFloat? = nil,
+                             fontColor: NSColor? = nil, outlineColor: NSColor? = nil,
+                             outlineWeight: CGFloat? = nil) {
+        guard let id = selectedTextID else { return }
+        document?.updateTextAnnotation(id: id, fontName: fontName, fontSize: fontSize,
+                                        fontColor: fontColor, outlineColor: outlineColor,
+                                        outlineWeight: outlineWeight)
+    }
 
+    /// Update the currently selected shape's properties.
+    func updateSelectedShape(shapeType: ShapeType? = nil, borderWeight: CGFloat? = nil,
+                              borderColor: NSColor? = nil, fillColor: NSColor? = nil) {
+        guard let id = selectedShapeID else { return }
+        document?.updateShape(id: id, shapeType: shapeType, borderWeight: borderWeight,
+                               borderColor: borderColor, fillColor: fillColor)
+    }
+
+    /// Update the currently selected blur region's properties.
     func updateSelectedBlur(intensity: CGFloat? = nil, style: BlurStyle? = nil) {
-        guard let id = selectedBlurID,
-              let idx = blurRegions.firstIndex(where: { $0.id == id }) else { return }
-        if let v = intensity { blurRegions[idx].intensity = v }
-        if let v = style     { blurRegions[idx].style     = v }
-        needsDisplay = true; onChange?()
+        guard let id = selectedBlurID else { return }
+        document?.updateBlurRegion(id: id, intensity: intensity, style: style)
     }
 
-    // MARK: - Update selected highlight
-
+    /// Update the currently selected highlight's properties.
     func updateSelectedHighlight(color: NSColor? = nil, opacity: CGFloat? = nil) {
-        guard let id = selectedHighlightID,
-              let idx = highlights.firstIndex(where: { $0.id == id }) else { return }
-        if let v = color   { highlights[idx].color   = v }
-        if let v = opacity { highlights[idx].opacity = v }
-        needsDisplay = true; onChange?()
-    }
-
-    // MARK: - Coordinate helpers
-
-    /// Constrains `current` so the rect from `start` to `current` is a perfect square.
-    /// The side length is the larger of the two deltas, preserving the drag direction.
-    private func constrainToSquare(start: CGPoint, current: CGPoint) -> CGPoint {
-        let dx = current.x - start.x
-        let dy = current.y - start.y
-        let side = max(abs(dx), abs(dy))
-        return CGPoint(
-            x: start.x + (dx < 0 ? -side : side),
-            y: start.y + (dy < 0 ? -side : side)
-        )
-    }
-
-    func toNorm(_ p: CGPoint) -> CGPoint {        let r = imageDisplayRect
-        guard r.width > 0, r.height > 0 else { return p }
-        return CGPoint(x: (p.x - r.minX) / r.width, y: (p.y - r.minY) / r.height)
-    }
-
-    func toView(_ p: CGPoint) -> CGPoint {
-        let r = imageDisplayRect
-        return CGPoint(x: p.x * r.width + r.minX, y: p.y * r.height + r.minY)
-    }
-
-    // MARK: - Hit testing
-
-    private func tailIndex(near point: CGPoint) -> Int? {
-        // Return the topmost (highest zOrder) matching arrow.
-        arrows.indices
-            .filter { hypot(point.x - toView(arrows[$0].start).x,
-                            point.y - toView(arrows[$0].start).y) < 12 }
-            .max(by: { arrows[$0].zOrder < arrows[$1].zOrder })
-    }
-
-    private func arrowBodyIndex(near point: CGPoint) -> Int? {
-        arrows.indices
-            .filter { distToSeg(point, toView(arrows[$0].start), toView(arrows[$0].end))
-                        < max(arrows[$0].weight / 2 + 8, 12.0) }
-            .max(by: { arrows[$0].zOrder < arrows[$1].zOrder })
-    }
-
-    private func textIndex(near point: CGPoint) -> Int? {
-        textAnnotations.indices
-            .filter { i in
-                let ann = textAnnotations[i]
-                guard ann.id != editingID else { return false }
-                let pt   = toView(ann.position)
-                let font = NSFont(name: ann.fontName, size: ann.fontSize)
-                    ?? NSFont.boldSystemFont(ofSize: ann.fontSize)
-                let sz: CGSize = ann.content.isEmpty
-                    ? CGSize(width: max(80, ann.fontSize * 4), height: ann.fontSize * 1.4)
-                    : NSAttributedString(string: ann.content, attributes: [.font: font]).size()
-                let rect = CGRect(x: pt.x - 6, y: pt.y - abs(font.descender) - 4,
-                                  width: sz.width + 12, height: sz.height + 8)
-                return rect.contains(point)
-            }
-            .max(by: { textAnnotations[$0].zOrder < textAnnotations[$1].zOrder })
-    }
-
-    private func shapeIndex(near point: CGPoint) -> Int? {
-        shapes.indices
-            .filter { i in
-                let shape = shapes[i]
-                let viewRect = toView(shape.rect.origin)
-                let viewSize = CGSize(width: shape.rect.width * imageDisplayRect.width,
-                                     height: shape.rect.height * imageDisplayRect.height)
-                return CGRect(origin: viewRect, size: viewSize).contains(point)
-            }
-            .max(by: { shapes[$0].zOrder < shapes[$1].zOrder })
-    }
-
-    private func blurIndex(near point: CGPoint) -> Int? {
-        blurRegions.indices
-            .filter { i in
-                let region = blurRegions[i]
-                let viewOrigin = toView(region.rect.origin)
-                let viewSize = CGSize(width: region.rect.width * imageDisplayRect.width,
-                                     height: region.rect.height * imageDisplayRect.height)
-                return CGRect(origin: viewOrigin, size: viewSize).standardized.contains(point)
-            }
-            .max(by: { blurRegions[$0].zOrder < blurRegions[$1].zOrder })
-    }
-
-    private func highlightIndex(near point: CGPoint) -> Int? {
-        highlights.indices
-            .filter { i in
-                let h = highlights[i]
-                let viewOrigin = toView(h.rect.origin)
-                let viewSize = CGSize(width: h.rect.width * imageDisplayRect.width,
-                                     height: h.rect.height * imageDisplayRect.height)
-                return CGRect(origin: viewOrigin, size: viewSize).standardized.contains(point)
-            }
-            .max(by: { highlights[$0].zOrder < highlights[$1].zOrder })
-    }
-
-    private func distToSeg(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
-        let dx = b.x - a.x, dy = b.y - a.y
-        let lenSq = dx*dx + dy*dy
-        if lenSq == 0 { return hypot(p.x - a.x, p.y - a.y) }
-        let t = max(0, min(1, ((p.x - a.x)*dx + (p.y - a.y)*dy) / lenSq))
-        return hypot(p.x - (a.x + t*dx), p.y - (a.y + t*dy))
+        guard let id = selectedHighlightID else { return }
+        document?.updateHighlight(id: id, color: color, opacity: opacity)
     }
 }
 
-// MARK: - NSTextViewDelegate
+// MARK: - DragState helpers
 
-extension AnnotationOverlay: NSTextViewDelegate {
-    func textDidChange(_ notification: Notification) {
-        guard let tv = editingTextView, let id = editingID else { return }
-        // Update annotation content live.
-        if let idx = textAnnotations.firstIndex(where: { $0.id == id }) {
-            textAnnotations[idx].content = tv.string
-        }
-        // Resize the editing view to fit the new content.
-        resizeEditingView()
-    }
-
-    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            finishEditing()
-            return true
-        }
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            cancelEditing()
-            return true
-        }
+fileprivate extension AnnotationOverlay.DragState {
+    func isMovingArrow(id: UUID) -> Bool {
+        if case .movingArrowWhole(let aid, _, _, _) = self { return aid == id }
         return false
     }
-
-    private func finishEditing() {
-        guard let sv = editingScrollView, let tv = editingTextView, let id = editingID else { return }
-        editingScrollView = nil
-        editingTextView = nil
-        editingID = nil
-        let text = tv.string
-        sv.removeFromSuperview()
-        if let idx = textAnnotations.firstIndex(where: { $0.id == id }) {
-            if text.isEmpty {
-                textAnnotations.remove(at: idx)
-                selectedTextID = nil
-            } else {
-                textAnnotations[idx].content = text
-            }
-            onChange?()
-        }
-        needsDisplay = true
-        window?.makeFirstResponder(self)
+    func isMovingArrowTail(id: UUID) -> Bool {
+        if case .movingArrowTail(let aid, _) = self { return aid == id }
+        return false
     }
+    func isMovingOrResizingShape(id: UUID) -> Bool {
+        if case .movingShapeWhole(let sid, _, _) = self { return sid == id }
+        if case .resizingShape(let sid, _, _) = self { return sid == id }
+        return false
+    }
+    func isMovingOrResizingBlur(id: UUID) -> Bool {
+        if case .movingBlurWhole(let bid, _, _) = self { return bid == id }
+        if case .resizingBlur(let bid, _, _) = self { return bid == id }
+        return false
+    }
+    func isMovingOrResizingHighlight(id: UUID) -> Bool {
+        if case .movingHighlightWhole(let hid, _, _) = self { return hid == id }
+        if case .resizingHighlight(let hid, _, _) = self { return hid == id }
+        return false
+    }
+}
 
-    private func cancelEditing() {
-        guard let sv = editingScrollView, let tv = editingTextView, let id = editingID else { return }
-        editingScrollView = nil
-        editingTextView = nil
-        editingID = nil
-        let text = tv.string
-        sv.removeFromSuperview()
-        if text.isEmpty, let idx = textAnnotations.firstIndex(where: { $0.id == id }) {
-            textAnnotations.remove(at: idx)
-            selectedTextID = nil
+// MARK: - EscapableTextView
+
+/// NSTextView subclass that calls `onEscape` when the user presses Escape,
+/// allowing the annotation overlay to finalize editing and reclaim focus.
+fileprivate class EscapableTextView: NSTextView {
+    var onEscape: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // Escape
+            onEscape?()
+        } else {
+            super.keyDown(with: event)
         }
-        needsDisplay = true
-        window?.makeFirstResponder(self)
     }
 }
