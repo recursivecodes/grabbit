@@ -491,6 +491,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             self.refreshBaseImage()
             self.refreshShadow()
             self.annotationOverlay.needsDisplay = true
+            if self.grabbitDocument.hasImage {
+                self.applyActiveState()
+            }
         }
 
         // ── Crop overlay wiring ──────────────────────────────────────────────────
@@ -879,6 +882,17 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         blurToolButton.isEnabled      = false
         highlightToolButton.isEnabled = false
         cropToolButton.isEnabled      = false
+    }
+
+    private func applyActiveState() {
+        annotationOverlay.isHidden = false
+        placeholderLabel.isHidden  = true
+        arrowToolButton.isEnabled     = true
+        textToolButton.isEnabled      = true
+        shapeToolButton.isEnabled     = true
+        blurToolButton.isEnabled      = true
+        highlightToolButton.isEnabled = true
+        cropToolButton.isEnabled      = true
     }
 
     /// Replace the current image (used by "Open…" and "New from Clipboard").
