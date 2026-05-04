@@ -7,6 +7,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
     private var hotkeyManager: HotkeyManager!
     private var captureMenuItem: NSMenuItem!
     private var quickCaptureMenuItem: NSMenuItem!
+    private var updateMenuItem: NSMenuItem?
+    private var latestReleaseURL: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Become the notification delegate so banners appear on screen.
@@ -19,6 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         )
         updateCaptureMenuTitles()
         requestScreenRecordingPermission()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            self.checkForUpdates()
+        }
     }
 
     // MARK: - Menu bar
@@ -84,6 +89,73 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         menu.addItem(withTitle: "Quit Grabbit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
 
         statusItem.menu = menu
+    }
+
+    // MARK: - Update check
+
+    private func checkForUpdates() {
+        guard let url = URL(string: "https://api.github.com/repos/recursivecodes/grabbit/releases/latest") else { return }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self,
+                  let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String,
+                  let releaseURL = json["html_url"] as? String else { return }
+
+            let latest  = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+
+            guard self.isVersion(latest, newerThan: current) else { return }
+
+            DispatchQueue.main.async {
+                self.latestReleaseURL = releaseURL
+                self.showUpdateMenuItem(version: latest)
+            }
+        }.resume()
+    }
+
+    /// Compares two dot-separated version strings numerically, segment by segment.
+    /// Returns true if `a` is strictly greater than `b`.
+    private func isVersion(_ a: String, newerThan b: String) -> Bool {
+        let segmentsA = a.split(separator: ".").map { Int($0) ?? 0 }
+        let segmentsB = b.split(separator: ".").map { Int($0) ?? 0 }
+        let length = max(segmentsA.count, segmentsB.count)
+        for i in 0..<length {
+            let va = i < segmentsA.count ? segmentsA[i] : 0
+            let vb = i < segmentsB.count ? segmentsB[i] : 0
+            if va != vb { return va > vb }
+        }
+        return false
+    }
+
+    private func showUpdateMenuItem(version: String) {
+        guard let menu = statusItem.menu else { return }
+
+        // Remove any existing update item first (e.g. if called again somehow)
+        if let existing = updateMenuItem {
+            menu.removeItem(existing)
+        }
+
+        let item = NSMenuItem(
+            title: "⬆ Update Available (\(version))",
+            action: #selector(openReleasePage),
+            keyEquivalent: ""
+        )
+        // Insert at the top of the menu, before the capture items
+        menu.insertItem(item, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        updateMenuItem = item
+    }
+
+    @objc private func openReleasePage() {
+        guard let urlString = latestReleaseURL,
+              let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func updateCaptureMenuTitles() {
