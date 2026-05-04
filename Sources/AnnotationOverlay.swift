@@ -786,7 +786,9 @@ class AnnotationOverlay: NSView {
             shapes[idx].rect.origin.y += d.y
             dragState = .movingShapeWhole(index: idx, lastLoc: loc); needsDisplay = true
         case .newShape(let s, _):
-            dragState = .newShape(start: s, current: loc); needsDisplay = true
+            let constrained = event.modifierFlags.contains(.shift)
+                ? constrainToSquare(start: s, current: loc) : loc
+            dragState = .newShape(start: s, current: constrained); needsDisplay = true
         case .resizingShape(let idx, let corner, let origRect):
             let r = imageDisplayRect; guard r.width > 0, r.height > 0 else { break }
             // Compute the original corner position in view space.
@@ -1289,8 +1291,19 @@ class AnnotationOverlay: NSView {
 
     // MARK: - Coordinate helpers
 
-    func toNorm(_ p: CGPoint) -> CGPoint {
-        let r = imageDisplayRect
+    /// Constrains `current` so the rect from `start` to `current` is a perfect square.
+    /// The side length is the larger of the two deltas, preserving the drag direction.
+    private func constrainToSquare(start: CGPoint, current: CGPoint) -> CGPoint {
+        let dx = current.x - start.x
+        let dy = current.y - start.y
+        let side = max(abs(dx), abs(dy))
+        return CGPoint(
+            x: start.x + (dx < 0 ? -side : side),
+            y: start.y + (dy < 0 ? -side : side)
+        )
+    }
+
+    func toNorm(_ p: CGPoint) -> CGPoint {        let r = imageDisplayRect
         guard r.width > 0, r.height > 0 else { return p }
         return CGPoint(x: (p.x - r.minX) / r.width, y: (p.y - r.minY) / r.height)
     }
