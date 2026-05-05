@@ -232,18 +232,32 @@ private class OverlayView: NSView {
         // Our own overlay window ID — skip it so we see through to windows below.
         let ownID = window.map { CGWindowID($0.windowNumber) }
 
-        // Windows are returned front-to-back; find the first non-overlay window
+        // Windows are returned front-to-back; find the first real app window
         // that contains the cursor point.
         for info in windowList {
             // Skip our own overlay.
             if let wid = info[kCGWindowNumber as String] as? Int,
                let oid = ownID, CGWindowID(wid) == oid { continue }
 
-            // Skip windows at the screenSaver level or above (other overlays, etc.)
-            // and below 0 (desktop/wallpaper).
+            // Only normal app-level windows (layer 0). The menu bar is layer 25,
+            // the desktop/wallpaper managed by Dock sits at layer -1 or 0 but is
+            // caught by the owner-name check below.
             guard let layer = info[kCGWindowLayer as String] as? Int,
-                  layer >= 0, layer < 25
+                  layer == 0
             else { continue }
+
+            // Skip windows owned by the Dock process — these are the desktop,
+            // Mission Control backgrounds, and similar system surfaces.
+            if let owner = info[kCGWindowOwnerName as String] as? String,
+               owner == "Dock" { continue }
+
+            // Skip fully transparent or invisible windows.
+            if let alpha = info[kCGWindowAlpha as String] as? CGFloat,
+               alpha <= 0 { continue }
+
+            // Must actually be on-screen.
+            guard let onScreen = info[kCGWindowIsOnscreen as String] as? Bool,
+                  onScreen else { continue }
 
             guard let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
 
@@ -255,8 +269,8 @@ private class OverlayView: NSView {
                 height: boundsDict["Height"] ?? 0
             )
 
-            // Skip tiny or invisible windows.
-            guard quartzRect.width > 10, quartzRect.height > 10 else { continue }
+            // Skip tiny windows (tooltips, popovers, etc.).
+            guard quartzRect.width > 50, quartzRect.height > 50 else { continue }
 
             guard quartzRect.contains(quartzPoint) else { continue }
 
@@ -272,7 +286,7 @@ private class OverlayView: NSView {
 
             // Clamp to the visible screen area.
             let clipped = viewRect.intersection(bounds)
-            guard !clipped.isNull, clipped.width > 10, clipped.height > 10 else { continue }
+            guard !clipped.isNull, clipped.width > 50, clipped.height > 50 else { continue }
 
             return clipped
         }
