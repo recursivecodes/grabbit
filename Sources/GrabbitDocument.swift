@@ -336,14 +336,50 @@ class GrabbitDocument: NSDocument {
     }
 
     func applyResize(to image: NSImage) {
-        let prev = currentImage
+        let prev       = currentImage
+        let prevArrows = arrows
+        let prevTexts  = textAnnotations
+
         undoManager?.registerUndo(withTarget: self) { doc in
-            doc.applyResize(to: prev)
+            doc.restoreAfterResize(image: prev, arrows: prevArrows, texts: prevTexts)
         }
         undoManager?.setActionName("Resize")
+
+        let scaleX = prev.size.width  > 0 ? image.size.width  / prev.size.width  : 1
+        let scaleY = prev.size.height > 0 ? image.size.height / prev.size.height : 1
+        let scale  = sqrt(scaleX * scaleY)
+        if scale != 1 {
+            arrows          = arrows.map { var a = $0; a.weight = max(0.5, a.weight * scale); return a }
+            textAnnotations = textAnnotations.map { var t = $0
+                t.fontSize      = max(1, t.fontSize      * scale)
+                t.outlineWeight = max(0, t.outlineWeight * scale)
+                return t
+            }
+        }
+
         currentImage = image
         updateChangeCount(.changeDone)
         onImageChanged?()
+        onAnnotationsChanged?()
+    }
+
+    /// Restores image + scaled annotations directly, without re-applying scale logic.
+    /// Used exclusively as the undo target for applyResize.
+    private func restoreAfterResize(image: NSImage, arrows: [Arrow], texts: [TextAnnotation]) {
+        let prev       = currentImage
+        let prevArrows = self.arrows
+        let prevTexts  = textAnnotations
+
+        undoManager?.registerUndo(withTarget: self) { doc in
+            doc.restoreAfterResize(image: prev, arrows: prevArrows, texts: prevTexts)
+        }
+
+        self.arrows          = arrows
+        self.textAnnotations = texts
+        currentImage         = image
+        updateChangeCount(.changeDone)
+        onImageChanged?()
+        onAnnotationsChanged?()
     }
 
     // MARK: - Annotation mutations (all undoable)

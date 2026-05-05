@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Tool
 
-enum AnnotationTool { case none, arrow, text, shape, blur, highlight }
+enum AnnotationTool { case none, arrow, text, shape, blur, highlight, ocr }
 
 // MARK: - ShapeType
 
@@ -141,6 +141,8 @@ class AnnotationOverlay: NSView {
     var onActivateTool:           ((AnnotationTool) -> Void)?
     var onSelectionChanged:       ((AnnotationTool) -> Void)?  // fires when a hit-test selects an annotation
     var imageProvider:            (() -> NSImage?)?
+    /// Fires with a normalized (0-1) rect when the user finishes dragging an OCR region.
+    var onOCRRegionSelected:      ((CGRect) -> Void)?
 
     // MARK: Selection state (view-only, not model)
     private var selectedArrowID: UUID?
@@ -171,6 +173,7 @@ class AnnotationOverlay: NSView {
         case newHighlight(start: CGPoint, current: CGPoint)
         case movingHighlightWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
         case resizingHighlight(id: UUID, corner: ResizeCorner, originalRect: CGRect)
+        case newOCR(start: CGPoint, current: CGPoint)
     }
     private var dragState: DragState = .none
 
@@ -313,6 +316,10 @@ class AnnotationOverlay: NSView {
             let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
             drawHighlightRect(rect, color: currentHighlightColor,
                               opacity: currentHighlightOpacity, selected: false)
+        }
+        if case .newOCR(let s, let c) = dragState {
+            let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
+            drawOCRRegion(rect)
         }
     }
 
@@ -466,13 +473,25 @@ class AnnotationOverlay: NSView {
         }
     }
 
+    private func drawOCRRegion(_ rect: CGRect) {
+        // Semi-transparent teal fill to distinguish from other tools.
+        NSColor.systemTeal.withAlphaComponent(0.15).setFill()
+        NSBezierPath(rect: rect).fill()
+        // Dashed teal border.
+        let border = NSBezierPath(rect: rect)
+        border.lineWidth = 1.5
+        NSColor.systemTeal.withAlphaComponent(0.9).setStroke()
+        border.setLineDash([6, 3], count: 2, phase: 0)
+        border.stroke()
+    }
+
     // MARK: - Cursor
 
     override func resetCursorRects() {
         // Base cursor for the active tool — overridden dynamically in mouseMoved.
         let cursor: NSCursor
         switch activeTool {
-        case .arrow, .shape, .blur, .highlight: cursor = .crosshair
+        case .arrow, .shape, .blur, .highlight, .ocr: cursor = .crosshair
         case .text:  cursor = .iBeam
         case .none:  cursor = .arrow
         }
@@ -495,7 +514,7 @@ class AnnotationOverlay: NSView {
         } else {
             // Restore the tool's default cursor.
             switch activeTool {
-            case .arrow, .shape, .blur, .highlight: NSCursor.crosshair.set()
+            case .arrow, .shape, .blur, .highlight, .ocr: NSCursor.crosshair.set()
             case .text:  NSCursor.iBeam.set()
             case .none:  NSCursor.arrow.set()
             }
@@ -904,6 +923,13 @@ class AnnotationOverlay: NSView {
                 needsDisplay = true
             }
 
+        // ── OCR ──────────────────────────────────────────────────────────────────
+        case .ocr:
+            if imgRect.contains(loc) {
+                dragState = .newOCR(start: loc, current: loc)
+                needsDisplay = true
+            }
+
         case .none:
             break
         }
@@ -1027,6 +1053,15 @@ class AnnotationOverlay: NSView {
         case .resizingHighlight(let id, let corner, let originalRect):
             liveDragRect = resizedViewRect(originalRect: originalRect, corner: corner,
                                            currentLoc: clamped, shift: shiftDown)
+
+        case .newOCR(let start, _):
+            var end = clamped
+            if shiftDown {
+                let side = min(abs(end.x - start.x), abs(end.y - start.y))
+                end.x = start.x + (end.x >= start.x ? side : -side)
+                end.y = start.y + (end.y >= start.y ? side : -side)
+            }
+            dragState = .newOCR(start: start, current: end)
 
         case .none:
             break
@@ -1180,6 +1215,15 @@ class AnnotationOverlay: NSView {
         case .resizingHighlight(let id, _, _):
             if let lr = liveDragRect {
                 document?.updateHighlight(id: id, rect: viewRectToNorm(lr.standardized))
+            }
+
+        case .newOCR(let start, let current):
+            let normRect = viewRectToNorm(
+                CGRect(origin: start,
+                       size: CGSize(width: current.x - start.x,
+                                    height: current.y - start.y)).standardized)
+            if normRect.width > 0.005, normRect.height > 0.005 {
+                onOCRRegionSelected?(normRect)
             }
 
         case .none:

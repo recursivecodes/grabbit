@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
+import Vision
 
 // MARK: - EditorWindowController
 
@@ -23,6 +24,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var zoomLabel:       NSTextField!
     private var cropToolButton:   NSButton!
     private var resizeToolButton: NSButton!
+    private var ocrToolButton:    NSButton!
     var cropOverlay:              CropOverlayView!
     private var placeholderLabel: NSTextField!
 
@@ -164,14 +166,16 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let shapeBtn     = makeToolButton("Shape")
         let cropBtn      = makeToolButton("Crop")
         let resizeBtn    = makeToolButton("Resize")
+        let ocrBtn       = makeToolButton("Extract Text")
         let blurBtn      = makeToolButton("Blur")
         let highlightBtn = makeToolButton("Highlight")
         cropBtn.toolTip      = "Crop image"
         resizeBtn.toolTip    = "Resize image"
+        ocrBtn.toolTip       = "Drag a region to extract text (OCR)"
         blurBtn.toolTip      = "Blur / pixelate a region"
         highlightBtn.toolTip = "Highlight a region"
 
-        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn])
+        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, ocrBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -345,7 +349,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         arrowToolButton = arrowBtn;  textToolButton = textBtn;  shapeToolButton = shapeBtn
         blurToolButton = blurBtn;    highlightToolButton = highlightBtn
         zoomScroll = zs;  zoomLabel = zl
-        cropToolButton = cropBtn;  resizeToolButton = resizeBtn;  cropOverlay = co
+        cropToolButton = cropBtn;  resizeToolButton = resizeBtn;  ocrToolButton = ocrBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
         borderWeightSlider = bwSlider;       borderWeightLabel = bwLabel;  borderColorWell = bcWell
         shadowXSlider = sxSlider;            shadowXLabel = sxLabel
@@ -376,6 +380,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         shapeBtn.target     = self; shapeBtn.action     = #selector(toggleShapeTool(_:))
         cropBtn.target      = self; cropBtn.action      = #selector(toggleCropTool(_:))
         resizeBtn.target    = self; resizeBtn.action    = #selector(resizeToolClicked(_:))
+        ocrBtn.target       = self; ocrBtn.action       = #selector(toggleOCRTool(_:))
         blurBtn.target      = self; blurBtn.action      = #selector(toggleBlurTool(_:))
         highlightBtn.target = self; highlightBtn.action = #selector(toggleHighlightTool(_:))
         zoomInBtn.target    = self; zoomInBtn.action    = #selector(zoomIn)
@@ -445,6 +450,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
             case .shape:     self.annotationOverlay.activeTool = .shape
             case .blur:      self.annotationOverlay.activeTool = .blur
             case .highlight: self.annotationOverlay.activeTool = .highlight
+            case .ocr:       self.annotationOverlay.activeTool = .ocr
             case .none:      self.annotationOverlay.activeTool = .none
             }
             self.window?.makeFirstResponder(self.annotationOverlay)
@@ -507,6 +513,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         }
         co.onCropConfirmed = { [weak self] normRect in self?.applyCrop(normRect: normRect) }
         co.onCropCancelled = { [weak self] in self?.deactivateCropTool() }
+
+        // ── OCR overlay wiring ───────────────────────────────────────────────────
+        annotationOverlay.onOCRRegionSelected = { [weak self] normRect in
+            self?.performOCR(normRect: normRect)
+        }
 
         // ── Title-bar Save button ────────────────────────────────────────────────
         let saveBtn = NSButton(title: "Save As…", target: self, action: #selector(saveAs(_:)))
@@ -614,12 +625,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         shapeToolButton.state     = tool == .shape     ? .on : .off
         blurToolButton.state      = tool == .blur      ? .on : .off
         highlightToolButton.state = tool == .highlight ? .on : .off
+        ocrToolButton.state       = tool == .ocr       ? .on : .off
         switch tool {
         case .arrow:     toolMode = .arrow
         case .text:      toolMode = .text
         case .shape:     toolMode = .shape
         case .blur:      toolMode = .blur
         case .highlight: toolMode = .highlight
+        case .ocr:       toolMode = .ocr
         case .none:      toolMode = .none
         }
         sidebar.setToolMode(toolMode)
@@ -629,6 +642,145 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         cropToolButton.state = .off
         cropOverlay.isHidden = true; cropOverlay.reset()
         syncToolbarState(to: .none)
+    }
+
+    // MARK: - OCR tool
+
+    @objc private func toggleOCRTool(_ sender: NSButton) {
+        if sender.state == .on {
+            syncToolbarState(to: .ocr)
+            annotationOverlay.activeTool = .ocr
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            syncToolbarState(to: .none)
+            annotationOverlay.activeTool = .none
+        }
+    }
+
+    private func performOCR(normRect: CGRect) {
+        let img = grabbitDocument.currentImage
+
+        guard let cgFull = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return }
+
+        // Use the actual CGImage pixel dimensions — these may differ from img.size
+        // on Retina displays (e.g. img.size = 500×300 but cgImage = 1000×600).
+        let cgW = CGFloat(cgFull.width)
+        let cgH = CGFloat(cgFull.height)
+
+        // normRect uses the overlay's coordinate convention: y=0 at the BOTTOM of
+        // the image. CGImage.cropping(to:) uses y=0 at the TOP. Flip the Y axis.
+        let pixelRect = CGRect(
+            x:      normRect.origin.x * cgW,
+            y:      (1.0 - normRect.origin.y - normRect.height) * cgH,
+            width:  normRect.width  * cgW,
+            height: normRect.height * cgH
+        ).integral
+
+        guard pixelRect.width > 1, pixelRect.height > 1,
+              let cgCropped = cgFull.cropping(to: pixelRect)
+        else { return }
+
+        // Run Vision on a background thread so the UI stays responsive.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+
+            let handler = VNImageRequestHandler(cgImage: cgCropped, options: [:])
+            var extractedText = ""
+            do {
+                try handler.perform([request])
+                let observations = request.results ?? []
+                extractedText = observations
+                    .compactMap { $0.topCandidates(1).first?.string }
+                    .joined(separator: "\n")
+            } catch {
+                NSLog("Grabbit: OCR failed: \(error)")
+            }
+
+            DispatchQueue.main.async {
+                self?.showOCRResult(extractedText)
+            }
+        }
+    }
+
+    private func showOCRResult(_ text: String) {
+        guard let win = window else { return }
+
+        // ── Sheet window ────────────────────────────────────────────────────────
+        let sheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        sheet.title = "Extracted Text"
+
+        let content = sheet.contentView!
+
+        // ── Scrollable, editable text area ───────────────────────────────────────
+        // NSTextView.scrollableTextView() returns a correctly wired scroll+text pair.
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        let textView = scrollView.documentView as! NSTextView
+
+        textView.isEditable      = true
+        textView.isSelectable    = true
+        textView.isRichText      = false
+        textView.font            = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.textColor       = .labelColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.drawsBackground = true
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled  = false
+        textView.string = text.isEmpty ? "(No text detected)" : text
+
+        // ── Buttons ──────────────────────────────────────────────────────────────
+        let copyBtn = NSButton(title: "Copy", target: nil, action: nil)
+        copyBtn.bezelStyle = .rounded
+        copyBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let closeBtn = NSButton(title: "Close", target: nil, action: nil)
+        closeBtn.bezelStyle    = .rounded
+        closeBtn.keyEquivalent = "\u{1b}"
+        closeBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let btnRow = NSStackView(views: [copyBtn, closeBtn])
+        btnRow.orientation = .horizontal; btnRow.spacing = 8
+        btnRow.translatesAutoresizingMaskIntoConstraints = false
+
+        content.addSubview(scrollView)
+        content.addSubview(btnRow)
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            scrollView.bottomAnchor.constraint(equalTo: btnRow.topAnchor, constant: -12),
+            btnRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            btnRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+        ])
+
+        // ── Button actions ───────────────────────────────────────────────────────
+        copyBtn.target = self
+        copyBtn.action = #selector(copyOCRText(_:))
+        closeBtn.target = self
+        closeBtn.action = #selector(dismissSheet(_:))
+
+        // Stash the text view so the copy handler can read it.
+        objc_setAssociatedObject(sheet, &OCRKeys.textView, textView, .OBJC_ASSOCIATION_RETAIN)
+
+        win.beginSheet(sheet)
+    }
+
+    @objc private func copyOCRText(_ sender: Any?) {
+        guard let sheet = window?.attachedSheet else { return }
+        let textView = objc_getAssociatedObject(sheet, &OCRKeys.textView) as? NSTextView
+        let str = textView?.string ?? ""
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(str, forType: .string)
     }
 
     // MARK: - Resize tool
@@ -1083,6 +1235,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         highlightToolButton.isEnabled = false
         cropToolButton.isEnabled      = false
         resizeToolButton.isEnabled    = false
+        ocrToolButton.isEnabled       = false
     }
 
     private func applyActiveState() {
@@ -1095,6 +1248,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         highlightToolButton.isEnabled = true
         cropToolButton.isEnabled      = true
         resizeToolButton.isEnabled    = true
+        ocrToolButton.isEnabled       = true
     }
 
     /// Replace the current image (used by "Open…" and "New from Clipboard").
@@ -1207,4 +1361,10 @@ private class ResizeFieldDelegate: NSObject, NSTextFieldDelegate {
               let val = Double(field.stringValue) else { return }
         onChange(CGFloat(val))
     }
+}
+
+// MARK: - OCR associated-object keys
+
+private enum OCRKeys {
+    static var textView: UInt8 = 0
 }

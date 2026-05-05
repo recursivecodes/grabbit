@@ -58,4 +58,4 @@ func saveString(_ value: String, key: String) {
 
 // MARK: - Tool mode
 
-enum ToolMode { case none, arrow, text, shape, crop, blur, highlight }
+enum ToolMode { case none, arrow, text, shape, crop, blur, highlight, ocr }
