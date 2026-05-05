@@ -121,6 +121,10 @@ private class OverlayView: NSView {
     private var currentPoint: NSPoint = .zero
     private var isDragging = false
 
+    // Window-snap state: the highlighted window rect in view coordinates,
+    // or nil when the cursor isn't hovering over a detectable window.
+    private var highlightedWindowRect: NSRect? = nil
+
     var onSelection: ((NSRect) -> Void)?
     var onCancel:    (() -> Void)?
 
@@ -156,11 +160,16 @@ private class OverlayView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         NSCursor.crosshair.set()
+        // Only do window detection when not in a drag.
+        guard !isDragging else { return }
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        updateWindowHighlight(at: viewPoint)
     }
 
     // Called by both keyDown and the window-level fallback.
     func cancel() {
         isDragging = false
+        highlightedWindowRect = nil
         onCancel?()
     }
 
@@ -173,17 +182,122 @@ private class OverlayView: NSView {
         )
     }
 
+    // MARK: - Window detection
+
+    /// Queries the window list and updates `highlightedWindowRect` for the
+    /// topmost on-screen window under `viewPoint` (in view/flipped coordinates).
+    private func updateWindowHighlight(at viewPoint: NSPoint) {
+        guard let screen = window?.screen ?? NSScreen.main else {
+            highlightedWindowRect = nil
+            needsDisplay = true
+            return
+        }
+
+        // CGWindowBounds uses Quartz screen coordinates:
+        //   • origin is the top-left of the primary display
+        //   • y increases downward
+        //   • multi-monitor: secondary screens have negative or large positive X/Y
+        //
+        // viewPoint is in flipped NSView coordinates (y=0 at top of THIS screen).
+        // Convert to Quartz screen space:
+        //   quartzX = screen.frame.origin.x + viewPoint.x
+        //   quartzY = (primaryScreenHeight - screen.frame.maxY) + viewPoint.y
+        //
+        // NSScreen.frame uses AppKit coords (y=0 at bottom of primary display),
+        // so primaryScreenHeight - screen.frame.maxY gives the Quartz Y of the
+        // top edge of this screen.
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let quartzPoint = CGPoint(
+            x: screen.frame.origin.x + viewPoint.x,
+            y: (primaryHeight - screen.frame.maxY) + viewPoint.y
+        )
+
+        let newRect = windowRect(atQuartzPoint: quartzPoint, screen: screen, primaryHeight: primaryHeight)
+        if newRect != highlightedWindowRect {
+            highlightedWindowRect = newRect
+            needsDisplay = true
+        }
+    }
+
+    /// Returns the view-space rect of the topmost on-screen window at the
+    /// given Quartz screen point (y=0 at top of primary display), or nil if none.
+    private func windowRect(atQuartzPoint quartzPoint: CGPoint,
+                            screen: NSScreen,
+                            primaryHeight: CGFloat) -> NSRect? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+                as? [[String: Any]]
+        else { return nil }
+
+        // Our own overlay window ID — skip it so we see through to windows below.
+        let ownID = window.map { CGWindowID($0.windowNumber) }
+
+        // Windows are returned front-to-back; find the first non-overlay window
+        // that contains the cursor point.
+        for info in windowList {
+            // Skip our own overlay.
+            if let wid = info[kCGWindowNumber as String] as? Int,
+               let oid = ownID, CGWindowID(wid) == oid { continue }
+
+            // Skip windows at the screenSaver level or above (other overlays, etc.)
+            // and below 0 (desktop/wallpaper).
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                  layer >= 0, layer < 25
+            else { continue }
+
+            guard let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
+
+            // CGWindowBounds is already in Quartz screen coordinates.
+            let quartzRect = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width:  boundsDict["Width"]  ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+
+            // Skip tiny or invisible windows.
+            guard quartzRect.width > 10, quartzRect.height > 10 else { continue }
+
+            guard quartzRect.contains(quartzPoint) else { continue }
+
+            // Convert Quartz rect → view (flipped) coordinates on this screen.
+            // Quartz Y of this screen's top edge = primaryHeight - screen.frame.maxY
+            let screenQuartzTop = primaryHeight - screen.frame.maxY
+            let viewRect = NSRect(
+                x: quartzRect.origin.x - screen.frame.origin.x,
+                y: quartzRect.origin.y - screenQuartzTop,
+                width:  quartzRect.width,
+                height: quartzRect.height
+            )
+
+            // Clamp to the visible screen area.
+            let clipped = viewRect.intersection(bounds)
+            guard !clipped.isNull, clipped.width > 10, clipped.height > 10 else { continue }
+
+            return clipped
+        }
+        return nil
+    }
+
+    // MARK: - Drawing
+
     override func draw(_ dirtyRect: NSRect) {
         screenshot.draw(in: bounds)
 
-        guard isDragging else { return }
+        if isDragging {
+            drawFreehandSelection()
+        } else if let winRect = highlightedWindowRect {
+            drawWindowHighlight(winRect)
+        }
+    }
+
+    private func drawFreehandSelection() {
+        let sel = selectionRect
+        guard sel.width > 0, sel.height > 0 else { return }
 
         // Darken everything outside the selection using even-odd fill.
         let overlay = NSBezierPath(rect: bounds)
-        let sel = selectionRect
-        if sel.width > 0 && sel.height > 0 {
-            overlay.append(NSBezierPath(rect: sel))
-        }
+        overlay.append(NSBezierPath(rect: sel))
         overlay.windingRule = .evenOdd
         NSColor.black.withAlphaComponent(0.45).setFill()
         overlay.fill()
@@ -194,16 +308,43 @@ private class OverlayView: NSView {
         border.lineWidth = 1.5
         border.stroke()
 
-        // Dimension label
-        let label = String(format: "%.0f × %.0f", sel.width, sel.height)
+        drawDimensionLabel(for: sel)
+    }
+
+    private func drawWindowHighlight(_ rect: NSRect) {
+        // Dim everything outside the highlighted window.
+        let overlay = NSBezierPath(rect: bounds)
+        overlay.append(NSBezierPath(rect: rect))
+        overlay.windingRule = .evenOdd
+        NSColor.black.withAlphaComponent(0.35).setFill()
+        overlay.fill()
+
+        // Bright blue border to signal window-snap mode.
+        let border = NSBezierPath(rect: rect)
+        border.lineWidth = 2.0
+        NSColor.systemBlue.withAlphaComponent(0.9).setStroke()
+        border.stroke()
+
+        // Subtle inner glow.
+        let innerRect = rect.insetBy(dx: 1, dy: 1)
+        let inner = NSBezierPath(rect: innerRect)
+        inner.lineWidth = 1.0
+        NSColor.white.withAlphaComponent(0.25).setStroke()
+        inner.stroke()
+
+        drawDimensionLabel(for: rect)
+    }
+
+    private func drawDimensionLabel(for rect: NSRect) {
+        let label = String(format: "%.0f × %.0f", rect.width, rect.height)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
             .foregroundColor: NSColor.white
         ]
         let labelSize = (label as NSString).size(withAttributes: attrs)
         let labelRect = NSRect(
-            x: sel.maxX - labelSize.width - 6,
-            y: sel.maxY + 4,
+            x: rect.maxX - labelSize.width - 6,
+            y: rect.maxY + 4,
             width: labelSize.width + 6,
             height: labelSize.height + 2
         )
@@ -215,28 +356,40 @@ private class OverlayView: NSView {
         )
     }
 
+    // MARK: - Mouse events
+
     override func mouseDown(with event: NSEvent) {
         startPoint   = convert(event.locationInWindow, from: nil)
         currentPoint = startPoint
         isDragging   = false
+        // Don't clear highlightedWindowRect yet — mouseUp may use it for a click-to-capture.
     }
 
     override func mouseDragged(with event: NSEvent) {
         currentPoint = convert(event.locationInWindow, from: nil)
         isDragging   = true
+        // Entering drag mode: leave window-snap and go freehand.
+        highlightedWindowRect = nil
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard isDragging else { return }
-        isDragging = false
-        let rect = selectionRect
-        if rect.width > 5 && rect.height > 5 {
-            onSelection?(rect)
-        } else {
-            // Selection too small — reset silently, don't dismiss.
-            needsDisplay = true
+        if isDragging {
+            // Freehand selection completed.
+            isDragging = false
+            let rect = selectionRect
+            if rect.width > 5 && rect.height > 5 {
+                onSelection?(rect)
+            } else {
+                // Selection too small — reset silently, don't dismiss.
+                needsDisplay = true
+            }
+        } else if let winRect = highlightedWindowRect {
+            // Click without drag while a window is highlighted → capture that window.
+            highlightedWindowRect = nil
+            onSelection?(winRect)
         }
+        // Plain click with no window highlight and no drag: do nothing.
     }
 
     override func keyDown(with event: NSEvent) {

@@ -35,7 +35,12 @@ class CaptureSession {
             return
         }
 
-        guard let screen = NSScreen.main else { return }
+        // Use the screen the cursor is currently on, not necessarily the primary.
+        // Fall back to the main screen if the cursor position can't be matched.
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) })
+                  ?? NSScreen.main
+                  ?? NSScreen.screens[0]
 
         isCapturing = true
         Self.mode = mode
@@ -95,8 +100,14 @@ class CaptureSession {
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(
                     false, onScreenWindowsOnly: true)
-                guard let display = content.displays.first(
-                    where: { $0.displayID == CGMainDisplayID() })
+
+                // Match the SCDisplay to the target screen by display ID.
+                // NSScreen.deviceDescription carries the CGDirectDisplayID.
+                let targetDisplayID = screen.deviceDescription[
+                    NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+                    ?? CGMainDisplayID()
+
+                guard let display = content.displays.first(where: { $0.displayID == targetDisplayID })
                 else {
                     await MainActor.run { fallbackCapture(screen: screen) }
                     return
@@ -104,6 +115,7 @@ class CaptureSession {
 
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let config = SCStreamConfiguration()
+                // Use the target screen's own backing scale factor, not the main screen's.
                 let scale = screen.backingScaleFactor
                 config.width  = Int(Double(display.width)  * scale)
                 config.height = Int(Double(display.height) * scale)

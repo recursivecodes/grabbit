@@ -21,8 +21,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var highlightToolButton: NSButton!
     private var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
-    private var cropToolButton:  NSButton!
-    var cropOverlay:             CropOverlayView!
+    private var cropToolButton:   NSButton!
+    private var resizeToolButton: NSButton!
+    var cropOverlay:              CropOverlayView!
     private var placeholderLabel: NSTextField!
 
     private var borderWeightSlider:      NSSlider!;  private var borderWeightLabel:      NSTextField!
@@ -162,13 +163,15 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let textBtn      = makeToolButton("Text")
         let shapeBtn     = makeToolButton("Shape")
         let cropBtn      = makeToolButton("Crop")
+        let resizeBtn    = makeToolButton("Resize")
         let blurBtn      = makeToolButton("Blur")
         let highlightBtn = makeToolButton("Highlight")
         cropBtn.toolTip      = "Crop image"
+        resizeBtn.toolTip    = "Resize image"
         blurBtn.toolTip      = "Blur / pixelate a region"
         highlightBtn.toolTip = "Highlight a region"
 
-        let toolsStack = NSStackView(views: [cropBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn])
+        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -342,7 +345,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         arrowToolButton = arrowBtn;  textToolButton = textBtn;  shapeToolButton = shapeBtn
         blurToolButton = blurBtn;    highlightToolButton = highlightBtn
         zoomScroll = zs;  zoomLabel = zl
-        cropToolButton = cropBtn;  cropOverlay = co
+        cropToolButton = cropBtn;  resizeToolButton = resizeBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
         borderWeightSlider = bwSlider;       borderWeightLabel = bwLabel;  borderColorWell = bcWell
         shadowXSlider = sxSlider;            shadowXLabel = sxLabel
@@ -372,6 +375,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         textBtn.target      = self; textBtn.action      = #selector(toggleTextTool(_:))
         shapeBtn.target     = self; shapeBtn.action     = #selector(toggleShapeTool(_:))
         cropBtn.target      = self; cropBtn.action      = #selector(toggleCropTool(_:))
+        resizeBtn.target    = self; resizeBtn.action    = #selector(resizeToolClicked(_:))
         blurBtn.target      = self; blurBtn.action      = #selector(toggleBlurTool(_:))
         highlightBtn.target = self; highlightBtn.action = #selector(toggleHighlightTool(_:))
         zoomInBtn.target    = self; zoomInBtn.action    = #selector(zoomIn)
@@ -625,6 +629,202 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         cropToolButton.state = .off
         cropOverlay.isHidden = true; cropOverlay.reset()
         syncToolbarState(to: .none)
+    }
+
+    // MARK: - Resize tool
+
+    @objc private func resizeToolClicked(_ sender: NSButton) {
+        // Resize is a momentary action, not a toggle — reset button state immediately.
+        sender.state = .off
+        showResizeDialog()
+    }
+
+    /// Hard upper bound on either dimension. 8192 × 8192 @ 4 bytes = 256 MB,
+    /// which is already very large. Going beyond this risks OOM crashes.
+    private static let resizeMaxPx: Int = 8192
+
+    private func showResizeDialog() {
+        guard let win = window else { return }
+        let img = grabbitDocument.currentImage
+        let origW = img.size.width
+        let origH = img.size.height
+        let maxPx = Self.resizeMaxPx
+
+        // ── Sheet window ────────────────────────────────────────────────────────
+        let sheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 185),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        sheet.title = "Resize Image"
+
+        let content = sheet.contentView!
+
+        // ── Labels ──────────────────────────────────────────────────────────────
+        let wLabel = NSTextField(labelWithString: "Width:")
+        wLabel.alignment = .right
+        wLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let hLabel = NSTextField(labelWithString: "Height:")
+        hLabel.alignment = .right
+        hLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let pxLabel1 = NSTextField(labelWithString: "px")
+        pxLabel1.translatesAutoresizingMaskIntoConstraints = false
+        let pxLabel2 = NSTextField(labelWithString: "px")
+        pxLabel2.translatesAutoresizingMaskIntoConstraints = false
+
+        // ── Text fields ─────────────────────────────────────────────────────────
+        let wField = NSTextField()
+        wField.stringValue = "\(Int(origW))"
+        wField.alignment = .right
+        wField.translatesAutoresizingMaskIntoConstraints = false
+        wField.widthAnchor.constraint(equalToConstant: 72).isActive = true
+
+        let hField = NSTextField()
+        hField.stringValue = "\(Int(origH))"
+        hField.alignment = .right
+        hField.translatesAutoresizingMaskIntoConstraints = false
+        hField.widthAnchor.constraint(equalToConstant: 72).isActive = true
+
+        // ── Lock button ─────────────────────────────────────────────────────────
+        let lockBtn = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
+        lockBtn.state = .on
+        lockBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        // ── Warning label (hidden until a value exceeds the cap) ─────────────────
+        let warningLabel = NSTextField(labelWithString: "Max \(maxPx) px per side.")
+        warningLabel.textColor = .systemOrange
+        warningLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        warningLabel.translatesAutoresizingMaskIntoConstraints = false
+        warningLabel.isHidden = true
+
+        // ── Action buttons ───────────────────────────────────────────────────────
+        let cancelBtn = NSButton(title: "Cancel", target: nil, action: nil)
+        cancelBtn.bezelStyle = .rounded
+        cancelBtn.keyEquivalent = "\u{1b}"
+        cancelBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let applyBtn = NSButton(title: "Apply", target: nil, action: nil)
+        applyBtn.bezelStyle = .rounded
+        applyBtn.keyEquivalent = "\r"
+        applyBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        // ── Layout ───────────────────────────────────────────────────────────────
+        let wRow = NSStackView(views: [wLabel, wField, pxLabel1])
+        wRow.orientation = .horizontal; wRow.spacing = 6; wRow.alignment = .centerY
+        wRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let hRow = NSStackView(views: [hLabel, hField, pxLabel2])
+        hRow.orientation = .horizontal; hRow.spacing = 6; hRow.alignment = .centerY
+        hRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let btnRow = NSStackView(views: [cancelBtn, applyBtn])
+        btnRow.orientation = .horizontal; btnRow.spacing = 8
+        btnRow.translatesAutoresizingMaskIntoConstraints = false
+
+        // Align the two row labels to the same width.
+        wLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        hLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+        let stack = NSStackView(views: [wRow, hRow, lockBtn, warningLabel, btnRow])
+        stack.orientation = .vertical; stack.spacing = 10; stack.alignment = .leading
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -16),
+            btnRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+        ])
+
+        // ── Validation helper ────────────────────────────────────────────────────
+        // Shows the warning and updates the Apply button title if either value
+        // exceeds the cap. Called after every field change.
+        let validate = {
+            let w = Int(wField.stringValue) ?? 0
+            let h = Int(hField.stringValue) ?? 0
+            let over = w > maxPx || h > maxPx
+            warningLabel.isHidden = !over
+            applyBtn.title = over ? "Apply (clamped)" : "Apply"
+        }
+
+        // ── Aspect-ratio enforcement ─────────────────────────────────────────────
+        var updatingFields = false
+
+        let wDelegate = ResizeFieldDelegate { [weak lockBtn] newVal in
+            guard !updatingFields, lockBtn?.state == .on, origW > 0 else {
+                validate(); return
+            }
+            updatingFields = true
+            let ratio = origH / origW
+            hField.stringValue = "\(max(1, Int(round(newVal * ratio))))"
+            updatingFields = false
+            validate()
+        }
+        let hDelegate = ResizeFieldDelegate { [weak lockBtn] newVal in
+            guard !updatingFields, lockBtn?.state == .on, origH > 0 else {
+                validate(); return
+            }
+            updatingFields = true
+            let ratio = origW / origH
+            wField.stringValue = "\(max(1, Int(round(newVal * ratio))))"
+            updatingFields = false
+            validate()
+        }
+        wField.delegate = wDelegate
+        hField.delegate = hDelegate
+
+        // ── Button actions ───────────────────────────────────────────────────────
+        cancelBtn.target = self
+        cancelBtn.action = #selector(dismissSheet(_:))
+
+        applyBtn.target = self
+        applyBtn.action = #selector(applyResizeFromSheet(_:))
+
+        // Stash context on the sheet so the apply handler can read it.
+        objc_setAssociatedObject(sheet, &ResizeKeys.wField,    wField,    .OBJC_ASSOCIATION_RETAIN)
+        objc_setAssociatedObject(sheet, &ResizeKeys.hField,    hField,    .OBJC_ASSOCIATION_RETAIN)
+        objc_setAssociatedObject(sheet, &ResizeKeys.wDelegate, wDelegate, .OBJC_ASSOCIATION_RETAIN)
+        objc_setAssociatedObject(sheet, &ResizeKeys.hDelegate, hDelegate, .OBJC_ASSOCIATION_RETAIN)
+
+        win.beginSheet(sheet)
+    }
+
+    @objc private func dismissSheet(_ sender: Any?) {
+        guard let sheet = window?.attachedSheet else { return }
+        window?.endSheet(sheet, returnCode: .cancel)
+    }
+
+    @objc private func applyResizeFromSheet(_ sender: Any?) {
+        guard let sheet = window?.attachedSheet else { return }
+        let wField = objc_getAssociatedObject(sheet, &ResizeKeys.wField) as? NSTextField
+        let hField = objc_getAssociatedObject(sheet, &ResizeKeys.hField) as? NSTextField
+
+        // Parse and hard-clamp to the safe maximum before doing any work.
+        let maxPx = Self.resizeMaxPx
+        let rawW = Int(wField?.stringValue ?? "0") ?? 0
+        let rawH = Int(hField?.stringValue ?? "0") ?? 0
+        let newW = CGFloat(min(maxPx, max(1, rawW)))
+        let newH = CGFloat(min(maxPx, max(1, rawH)))
+
+        window?.endSheet(sheet, returnCode: .OK)
+
+        let img = grabbitDocument.currentImage
+        guard newW != img.size.width || newH != img.size.height else { return }
+
+        // Draw the current image into a new bitmap at the target size.
+        let resized = NSImage(size: NSSize(width: newW, height: newH))
+        resized.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        img.draw(in: NSRect(origin: .zero, size: NSSize(width: newW, height: newH)),
+                 from: NSRect(origin: .zero, size: img.size),
+                 operation: .copy, fraction: 1.0)
+        resized.unlockFocus()
+
+        grabbitDocument.applyResize(to: resized)
     }
 
     private func applyCrop(normRect: CGRect) {
@@ -882,6 +1082,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         blurToolButton.isEnabled      = false
         highlightToolButton.isEnabled = false
         cropToolButton.isEnabled      = false
+        resizeToolButton.isEnabled    = false
     }
 
     private func applyActiveState() {
@@ -893,6 +1094,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         blurToolButton.isEnabled      = true
         highlightToolButton.isEnabled = true
         cropToolButton.isEnabled      = true
+        resizeToolButton.isEnabled    = true
     }
 
     /// Replace the current image (used by "Open…" and "New from Clipboard").
@@ -981,5 +1183,28 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         let scale = min(1.0, min(vw / iw, vh / ih))
         let sw = iw * scale, sh = ih * scale
         return CGRect(x: (vw - sw) / 2, y: (vh - sh) / 2, width: sw, height: sh)
+    }
+}
+
+// MARK: - Resize helpers
+
+/// Keys for objc_setAssociatedObject used to pass context to the sheet handlers.
+private enum ResizeKeys {
+    static var wField:    UInt8 = 0
+    static var hField:    UInt8 = 1
+    static var wDelegate: UInt8 = 2
+    static var hDelegate: UInt8 = 3
+}
+
+/// NSTextField delegate that fires a callback whenever the user edits the value,
+/// used to keep width/height in sync when aspect ratio is locked.
+private class ResizeFieldDelegate: NSObject, NSTextFieldDelegate {
+    private let onChange: (CGFloat) -> Void
+    init(_ onChange: @escaping (CGFloat) -> Void) { self.onChange = onChange }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField,
+              let val = Double(field.stringValue) else { return }
+        onChange(CGFloat(val))
     }
 }

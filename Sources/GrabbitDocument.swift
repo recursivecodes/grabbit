@@ -335,6 +335,17 @@ class GrabbitDocument: NSDocument {
         onImageChanged?()
     }
 
+    func applyResize(to image: NSImage) {
+        let prev = currentImage
+        undoManager?.registerUndo(withTarget: self) { doc in
+            doc.applyResize(to: prev)
+        }
+        undoManager?.setActionName("Resize")
+        currentImage = image
+        updateChangeCount(.changeDone)
+        onImageChanged?()
+    }
+
     // MARK: - Annotation mutations (all undoable)
     // Each method snapshots the relevant array, registers the inverse, then mutates.
 
