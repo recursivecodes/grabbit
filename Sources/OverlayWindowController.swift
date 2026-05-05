@@ -51,8 +51,8 @@ class OverlayWindowController: NSWindowController {
 
         super.init(window: win)
 
-        overlayView.onSelection = { [weak self] viewRect in
-            self?.finishCapture(viewRect: viewRect, screenshot: screenshot, screen: screen)
+        overlayView.onSelection = { [weak self] viewRect, windowID in
+            self?.finishCapture(viewRect: viewRect, windowID: windowID, screenshot: screenshot, screen: screen)
         }
         overlayView.onCancel = { [weak self] in
             self?.dismiss()
@@ -84,7 +84,30 @@ class OverlayWindowController: NSWindowController {
         // Don't call captureDidEnd here — the caller manages that.
     }
 
-    private func finishCapture(viewRect: NSRect, screenshot: NSImage, screen: NSScreen) {
+    private func finishCapture(viewRect: NSRect, windowID: CGWindowID?,
+                               screenshot: NSImage, screen: NSScreen) {
+        // ── Window-snap path: re-capture the specific window directly from the
+        //    compositor, bypassing any windows drawn on top of it. ───────────────
+        if let wid = windowID {
+            let imageOptions: CGWindowImageOption = [
+                .boundsIgnoreFraming,
+                .bestResolution
+            ]
+            if let cgWindow = CGWindowListCreateImage(
+                .null, .optionIncludingWindow, wid, imageOptions),
+               cgWindow.width > 0, cgWindow.height > 0 {
+                let size = NSSize(width: CGFloat(cgWindow.width) / screen.backingScaleFactor,
+                                  height: CGFloat(cgWindow.height) / screen.backingScaleFactor)
+                let captured = NSImage(cgImage: cgWindow, size: size)
+                dismiss()
+                CaptureSession.captureDidFinish(image: captured)
+                return
+            }
+            // Fall through to crop path if CGWindowListCreateImage fails.
+            NSLog("Grabbit: CGWindowListCreateImage failed for window \(wid), falling back to crop")
+        }
+
+        // ── Freehand crop path ───────────────────────────────────────────────────
         let scale = screen.backingScaleFactor
         let pixelRect = CGRect(
             x: viewRect.origin.x * scale,
@@ -97,17 +120,12 @@ class OverlayWindowController: NSWindowController {
             let cgFull    = screenshot.cgImage(forProposedRect: nil, context: nil, hints: nil),
             let cgCropped = cgFull.cropping(to: pixelRect)
         else {
-            // Crop failed — dismiss cleanly so the app isn't stuck.
             NSLog("Grabbit: crop failed, dismissing overlay")
             dismiss()
             return
         }
 
         let cropped = NSImage(cgImage: cgCropped, size: viewRect.size)
-
-        // Dismiss the overlay first so it's fully gone before the editor
-        // activates — having a screenSaver-level window close during activation
-        // can interfere with the menu bar appearing.
         dismiss()
         CaptureSession.captureDidFinish(image: cropped)
     }
@@ -121,11 +139,14 @@ private class OverlayView: NSView {
     private var currentPoint: NSPoint = .zero
     private var isDragging = false
 
-    // Window-snap state: the highlighted window rect in view coordinates,
-    // or nil when the cursor isn't hovering over a detectable window.
+    // Window-snap state: the highlighted window rect in view coordinates plus
+    // its CGWindowID, or nil when no window is under the cursor.
     private var highlightedWindowRect: NSRect? = nil
+    private var highlightedWindowID:   CGWindowID? = nil
 
-    var onSelection: ((NSRect) -> Void)?
+    // onSelection carries the view rect and an optional window ID.
+    // windowID is non-nil only for window-snap clicks (not freehand drags).
+    var onSelection: ((NSRect, CGWindowID?) -> Void)?
     var onCancel:    (() -> Void)?
 
     // Flipped so y=0 is at the top, matching CGImage's coordinate layout.
@@ -170,6 +191,7 @@ private class OverlayView: NSView {
     func cancel() {
         isDragging = false
         highlightedWindowRect = nil
+        highlightedWindowID   = nil
         onCancel?()
     }
 
@@ -184,70 +206,54 @@ private class OverlayView: NSView {
 
     // MARK: - Window detection
 
-    /// Queries the window list and updates `highlightedWindowRect` for the
-    /// topmost on-screen window under `viewPoint` (in view/flipped coordinates).
+    /// Queries the window list and updates `highlightedWindowRect` / `highlightedWindowID`
+    /// for the topmost on-screen window under `viewPoint` (in view/flipped coordinates).
     private func updateWindowHighlight(at viewPoint: NSPoint) {
         guard let screen = window?.screen ?? NSScreen.main else {
             highlightedWindowRect = nil
+            highlightedWindowID   = nil
             needsDisplay = true
             return
         }
 
-        // CGWindowBounds uses Quartz screen coordinates:
-        //   • origin is the top-left of the primary display
-        //   • y increases downward
-        //   • multi-monitor: secondary screens have negative or large positive X/Y
-        //
-        // viewPoint is in flipped NSView coordinates (y=0 at top of THIS screen).
-        // Convert to Quartz screen space:
-        //   quartzX = screen.frame.origin.x + viewPoint.x
-        //   quartzY = (primaryScreenHeight - screen.frame.maxY) + viewPoint.y
-        //
-        // NSScreen.frame uses AppKit coords (y=0 at bottom of primary display),
-        // so primaryScreenHeight - screen.frame.maxY gives the Quartz Y of the
-        // top edge of this screen.
         let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let quartzPoint = CGPoint(
             x: screen.frame.origin.x + viewPoint.x,
             y: (primaryHeight - screen.frame.maxY) + viewPoint.y
         )
 
-        let newRect = windowRect(atQuartzPoint: quartzPoint, screen: screen, primaryHeight: primaryHeight)
+        let result = windowInfo(atQuartzPoint: quartzPoint, screen: screen, primaryHeight: primaryHeight)
+        let newRect = result?.rect
         if newRect != highlightedWindowRect {
             highlightedWindowRect = newRect
+            highlightedWindowID   = result?.windowID
             needsDisplay = true
         }
     }
 
-    /// Returns the view-space rect of the topmost on-screen window at the
+    /// Returns the view-space rect and CGWindowID of the topmost on-screen window at the
     /// given Quartz screen point (y=0 at top of primary display), or nil if none.
-    private func windowRect(atQuartzPoint quartzPoint: CGPoint,
+    private func windowInfo(atQuartzPoint quartzPoint: CGPoint,
                             screen: NSScreen,
-                            primaryHeight: CGFloat) -> NSRect? {
+                            primaryHeight: CGFloat) -> (rect: NSRect, windowID: CGWindowID)? {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
                 as? [[String: Any]]
         else { return nil }
 
-        // Our own overlay window ID — skip it so we see through to windows below.
         let ownID = window.map { CGWindowID($0.windowNumber) }
 
-        // Windows are returned front-to-back; find the first real app window
-        // that contains the cursor point.
         for info in windowList {
             // Skip our own overlay.
             if let wid = info[kCGWindowNumber as String] as? Int,
                let oid = ownID, CGWindowID(wid) == oid { continue }
 
-            // Only normal app-level windows (layer 0). The menu bar is layer 25,
-            // the desktop/wallpaper managed by Dock sits at layer -1 or 0 but is
-            // caught by the owner-name check below.
+            // Only normal app-level windows (layer 0).
             guard let layer = info[kCGWindowLayer as String] as? Int,
                   layer == 0
             else { continue }
 
-            // Skip windows owned by the Dock process — these are the desktop,
-            // Mission Control backgrounds, and similar system surfaces.
+            // Skip Dock-owned windows (desktop, Mission Control backgrounds, etc.).
             if let owner = info[kCGWindowOwnerName as String] as? String,
                owner == "Dock" { continue }
 
@@ -259,9 +265,10 @@ private class OverlayView: NSView {
             guard let onScreen = info[kCGWindowIsOnscreen as String] as? Bool,
                   onScreen else { continue }
 
-            guard let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
+            guard let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let wid = info[kCGWindowNumber as String] as? Int
+            else { continue }
 
-            // CGWindowBounds is already in Quartz screen coordinates.
             let quartzRect = CGRect(
                 x: boundsDict["X"] ?? 0,
                 y: boundsDict["Y"] ?? 0,
@@ -269,13 +276,9 @@ private class OverlayView: NSView {
                 height: boundsDict["Height"] ?? 0
             )
 
-            // Skip tiny windows (tooltips, popovers, etc.).
             guard quartzRect.width > 50, quartzRect.height > 50 else { continue }
-
             guard quartzRect.contains(quartzPoint) else { continue }
 
-            // Convert Quartz rect → view (flipped) coordinates on this screen.
-            // Quartz Y of this screen's top edge = primaryHeight - screen.frame.maxY
             let screenQuartzTop = primaryHeight - screen.frame.maxY
             let viewRect = NSRect(
                 x: quartzRect.origin.x - screen.frame.origin.x,
@@ -284,11 +287,10 @@ private class OverlayView: NSView {
                 height: quartzRect.height
             )
 
-            // Clamp to the visible screen area.
             let clipped = viewRect.intersection(bounds)
             guard !clipped.isNull, clipped.width > 50, clipped.height > 50 else { continue }
 
-            return clipped
+            return (rect: clipped, windowID: CGWindowID(wid))
         }
         return nil
     }
@@ -384,24 +386,26 @@ private class OverlayView: NSView {
         isDragging   = true
         // Entering drag mode: leave window-snap and go freehand.
         highlightedWindowRect = nil
+        highlightedWindowID   = nil
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
         if isDragging {
-            // Freehand selection completed.
+            // Freehand selection completed — no window ID.
             isDragging = false
             let rect = selectionRect
             if rect.width > 5 && rect.height > 5 {
-                onSelection?(rect)
+                onSelection?(rect, nil)
             } else {
-                // Selection too small — reset silently, don't dismiss.
                 needsDisplay = true
             }
         } else if let winRect = highlightedWindowRect {
             // Click without drag while a window is highlighted → capture that window.
+            let wid = highlightedWindowID
             highlightedWindowRect = nil
-            onSelection?(winRect)
+            highlightedWindowID   = nil
+            onSelection?(winRect, wid)
         }
         // Plain click with no window highlight and no drag: do nothing.
     }
