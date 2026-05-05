@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Tool
 
-enum AnnotationTool { case none, arrow, text, shape, blur, highlight, ocr }
+enum AnnotationTool { case none, arrow, text, shape, blur, highlight, ocr, spotlight }
 
 // MARK: - ShapeType
 
@@ -44,6 +44,17 @@ struct Highlight {
     var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
     var color: NSColor
     var opacity: CGFloat  // 0-1
+}
+
+// MARK: - Spotlight
+
+struct Spotlight {
+    var id = UUID()
+    var zOrder: Int = 0
+    var rect: CGRect      // normalized 0-1 relative to imageDisplayRect, y=0 at bottom
+    var overlayColor: NSColor
+    var overlayOpacity: CGFloat  // 0-1
+    var shapeType: ShapeType
 }
 
 // MARK: - Arrow
@@ -103,6 +114,7 @@ class AnnotationOverlay: NSView {
     var shapes:          [Shape]          { document?.shapes          ?? [] }
     var blurRegions:     [BlurRegion]     { document?.blurRegions     ?? [] }
     var highlights:      [Highlight]      { document?.highlights      ?? [] }
+    var spotlights:      [Spotlight]      { document?.spotlights      ?? [] }
 
     // MARK: Current tool defaults (set by EditorWindowController from sidebar)
     var currentWeight:        CGFloat   = 2
@@ -118,8 +130,11 @@ class AnnotationOverlay: NSView {
     var currentFillColor:     NSColor   = .clear
     var currentBlurIntensity: CGFloat   = 80
     var currentBlurStyle:     BlurStyle = .blur
-    var currentHighlightColor:   NSColor = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
-    var currentHighlightOpacity: CGFloat = 0.4
+    var currentHighlightColor:       NSColor = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
+    var currentHighlightOpacity:     CGFloat = 0.4
+    var currentSpotlightOverlayColor:   NSColor = .black
+    var currentSpotlightOverlayOpacity: CGFloat = 0.5
+    var currentSpotlightShapeType:      ShapeType = .rectangle
 
     // MARK: Active tool
     var activeTool: AnnotationTool = .none {
@@ -130,6 +145,7 @@ class AnnotationOverlay: NSView {
             if activeTool != .shape     { selectedShapeID = nil }
             if activeTool != .blur      { selectedBlurID = nil }
             if activeTool != .highlight { selectedHighlightID = nil }
+            if activeTool != .spotlight { selectedSpotlightID = nil }
             needsDisplay = true
         }
     }
@@ -152,9 +168,10 @@ class AnnotationOverlay: NSView {
             onTextSelectionChanged?(ann)
         }
     }
-    private var selectedShapeID:     UUID?
-    private var selectedBlurID:      UUID?
-    private var selectedHighlightID: UUID?
+    private var selectedShapeID:      UUID?
+    private var selectedBlurID:       UUID?
+    private var selectedHighlightID:  UUID?
+    private var selectedSpotlightID:  UUID?
 
     enum ResizeCorner { case topLeft, topRight, bottomLeft, bottomRight }
 
@@ -174,6 +191,9 @@ class AnnotationOverlay: NSView {
         case movingHighlightWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
         case resizingHighlight(id: UUID, corner: ResizeCorner, originalRect: CGRect)
         case newOCR(start: CGPoint, current: CGPoint)
+        case newSpotlight(start: CGPoint, current: CGPoint)
+        case movingSpotlightWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
+        case resizingSpotlight(id: UUID, corner: ResizeCorner, originalRect: CGRect)
     }
     private var dragState: DragState = .none
 
@@ -296,6 +316,27 @@ class AnnotationOverlay: NSView {
             })
         }
 
+        for spotlight in spotlights {
+            let s = spotlight
+            let drawRect: CGRect
+            if dragState.isMovingOrResizingSpotlight(id: s.id), let lr = liveDragRect {
+                drawRect = lr
+            } else {
+                let viewOrigin = toView(s.rect.origin)
+                let viewSize = CGSize(width: s.rect.width * imageDisplayRect.width,
+                                     height: s.rect.height * imageDisplayRect.height)
+                drawRect = CGRect(origin: viewOrigin, size: viewSize)
+            }
+            items.append(DrawItem(zOrder: s.zOrder) {
+                self.drawSpotlightRect(drawRect.standardized, overlayColor: s.overlayColor,
+                                       opacity: s.overlayOpacity, shapeType: s.shapeType,
+                                       selected: self.selectedSpotlightID == s.id)
+                if self.selectedSpotlightID == s.id {
+                    self.drawCornerHandles(for: drawRect.standardized)
+                }
+            })
+        }
+
         items.sorted { $0.zOrder < $1.zOrder }.forEach { $0.draw() }
 
         // In-progress new annotations drawn on top.
@@ -320,6 +361,12 @@ class AnnotationOverlay: NSView {
         if case .newOCR(let s, let c) = dragState {
             let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
             drawOCRRegion(rect)
+        }
+        if case .newSpotlight(let s, let c) = dragState {
+            let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
+            drawSpotlightRect(rect, overlayColor: currentSpotlightOverlayColor,
+                              opacity: currentSpotlightOverlayOpacity,
+                              shapeType: currentSpotlightShapeType, selected: false)
         }
     }
 
@@ -473,6 +520,37 @@ class AnnotationOverlay: NSView {
         }
     }
 
+    private func drawSpotlightRect(_ rect: CGRect, overlayColor: NSColor,
+                                    opacity: CGFloat, shapeType: ShapeType, selected: Bool) {
+        // Fill the entire image area with the dim overlay, with an even-odd hole for the spotlight.
+        let outer = NSBezierPath(rect: imageDisplayRect)
+        switch shapeType {
+        case .rectangle:        outer.appendRect(rect)
+        case .circle:           outer.appendOval(in: rect)
+        case .roundedRectangle: outer.appendRoundedRect(rect, xRadius: 10, yRadius: 10)
+        }
+        outer.windingRule = .evenOdd
+        overlayColor.withAlphaComponent(min(max(opacity, 0.05), 0.95)).setFill()
+        outer.fill()
+        // Border around the spotlight window.
+        let border: NSBezierPath
+        switch shapeType {
+        case .rectangle:        border = NSBezierPath(rect: rect)
+        case .circle:           border = NSBezierPath(ovalIn: rect)
+        case .roundedRectangle: border = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
+        }
+        if selected {
+            border.lineWidth = 1.5
+            NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
+            border.setLineDash([5, 3], count: 2, phase: 0)
+            border.stroke()
+        } else {
+            border.lineWidth = 1
+            NSColor.white.withAlphaComponent(0.5).setStroke()
+            border.stroke()
+        }
+    }
+
     private func drawOCRRegion(_ rect: CGRect) {
         // Semi-transparent teal fill to distinguish from other tools.
         NSColor.systemTeal.withAlphaComponent(0.15).setFill()
@@ -491,7 +569,7 @@ class AnnotationOverlay: NSView {
         // Base cursor for the active tool — overridden dynamically in mouseMoved.
         let cursor: NSCursor
         switch activeTool {
-        case .arrow, .shape, .blur, .highlight, .ocr: cursor = .crosshair
+        case .arrow, .shape, .blur, .highlight, .ocr, .spotlight: cursor = .crosshair
         case .text:  cursor = .iBeam
         case .none:  cursor = .arrow
         }
@@ -514,7 +592,7 @@ class AnnotationOverlay: NSView {
         } else {
             // Restore the tool's default cursor.
             switch activeTool {
-            case .arrow, .shape, .blur, .highlight, .ocr: NSCursor.crosshair.set()
+            case .arrow, .shape, .blur, .highlight, .ocr, .spotlight: NSCursor.crosshair.set()
             case .text:  NSCursor.iBeam.set()
             case .none:  NSCursor.arrow.set()
             }
@@ -538,6 +616,10 @@ class AnnotationOverlay: NSView {
            let h = highlights.first(where: { $0.id == id }) {
             rects.append((viewRect(for: h.rect), id))
         }
+        if let id = selectedSpotlightID,
+           let s = spotlights.first(where: { $0.id == id }) {
+            rects.append((viewRect(for: s.rect), id))
+        }
 
         for (vr, _) in rects {
             guard let corner = hitCorner(of: vr, at: pt) else { continue }
@@ -557,6 +639,7 @@ class AnnotationOverlay: NSView {
         let allAnnotations: [(CGRect?)] = shapes.map { viewRect(for: $0.rect) }
             + blurRegions.map { viewRect(for: $0.rect) }
             + highlights.map  { viewRect(for: $0.rect) }
+            + spotlights.map  { viewRect(for: $0.rect) }
         for vr in allAnnotations {
             if let vr, vr.standardized.contains(pt) { return .openHand }
         }
@@ -702,7 +785,7 @@ class AnnotationOverlay: NSView {
         // so the topmost-drawn annotation wins the hit-test.
         enum AnyAnnotation {
             case arrow(Arrow), text(TextAnnotation), shape(Shape)
-            case blur(BlurRegion), highlight(Highlight)
+            case blur(BlurRegion), highlight(Highlight), spotlight(Spotlight)
             var zOrder: Int {
                 switch self {
                 case .arrow(let a):     return a.zOrder
@@ -710,6 +793,7 @@ class AnnotationOverlay: NSView {
                 case .shape(let s):     return s.zOrder
                 case .blur(let b):      return b.zOrder
                 case .highlight(let h): return h.zOrder
+                case .spotlight(let s): return s.zOrder
                 }
             }
         }
@@ -719,6 +803,7 @@ class AnnotationOverlay: NSView {
         shapes.forEach          { all.append(.shape($0)) }
         blurRegions.forEach     { all.append(.blur($0)) }
         highlights.forEach      { all.append(.highlight($0)) }
+        spotlights.forEach      { all.append(.spotlight($0)) }
         all.sort { $0.zOrder > $1.zOrder }
 
         for item in all {
@@ -826,6 +911,26 @@ class AnnotationOverlay: NSView {
                     notifySelection(.highlight)
                     return true
                 }
+
+            case .spotlight(let s):
+                let vr = viewRect(for: s.rect)
+                if let corner = hitCorner(of: vr, at: loc) {
+                    clearAllSelections()
+                    selectedSpotlightID = s.id
+                    dragState = .resizingSpotlight(id: s.id, corner: corner,
+                                                   originalRect: s.rect)
+                    liveDragRect = vr; needsDisplay = true
+                    notifySelection(.spotlight)
+                    return true
+                }
+                if vr.standardized.contains(loc) {
+                    clearAllSelections()
+                    selectedSpotlightID = s.id
+                    dragState = .movingSpotlightWhole(id: s.id, origRect: s.rect, lastLoc: loc)
+                    liveDragRect = vr; dragAnchor = loc; needsDisplay = true
+                    notifySelection(.spotlight)
+                    return true
+                }
             }
         }
         return false
@@ -838,6 +943,7 @@ class AnnotationOverlay: NSView {
         selectedShapeID     = nil
         selectedBlurID      = nil
         selectedHighlightID = nil
+        selectedSpotlightID = nil
     }
 
     /// Call after setting a new selection to notify the window controller.
@@ -927,6 +1033,14 @@ class AnnotationOverlay: NSView {
         case .ocr:
             if imgRect.contains(loc) {
                 dragState = .newOCR(start: loc, current: loc)
+                needsDisplay = true
+            }
+
+        // ── Spotlight ─────────────────────────────────────────────────────────────
+        case .spotlight:
+            if imgRect.contains(loc) {
+                selectedSpotlightID = nil
+                dragState = .newSpotlight(start: loc, current: loc)
                 needsDisplay = true
             }
 
@@ -1062,6 +1176,30 @@ class AnnotationOverlay: NSView {
                 end.y = start.y + (end.y >= start.y ? side : -side)
             }
             dragState = .newOCR(start: start, current: end)
+
+        case .newSpotlight(let start, _):
+            var end = clamped
+            if shiftDown {
+                let side = min(abs(end.x - start.x), abs(end.y - start.y))
+                end.x = start.x + (end.x >= start.x ? side : -side)
+                end.y = start.y + (end.y >= start.y ? side : -side)
+            }
+            dragState = .newSpotlight(start: start, current: end)
+
+        case .movingSpotlightWhole(let id, let origRect, let lastLoc):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            _ = lastLoc
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            liveDragRect = viewRect(for: newRect)
+            dragState = .movingSpotlightWhole(id: id, origRect: origRect, lastLoc: loc)
+
+        case .resizingSpotlight(let id, let corner, let originalRect):
+            liveDragRect = resizedViewRect(originalRect: originalRect, corner: corner,
+                                           currentLoc: clamped, shift: shiftDown)
 
         case .none:
             break
@@ -1226,6 +1364,34 @@ class AnnotationOverlay: NSView {
                 onOCRRegionSelected?(normRect)
             }
 
+        case .newSpotlight(let start, let current):
+            let normRect = viewRectToNorm(
+                CGRect(origin: start,
+                       size: CGSize(width: current.x - start.x,
+                                    height: current.y - start.y)).standardized)
+            if normRect.width > 0.005, normRect.height > 0.005 {
+                let s = Spotlight(id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                                  rect: normRect, overlayColor: currentSpotlightOverlayColor,
+                                  overlayOpacity: currentSpotlightOverlayOpacity,
+                                  shapeType: currentSpotlightShapeType)
+                document?.addSpotlight(s)
+                selectedSpotlightID = s.id
+            }
+
+        case .movingSpotlightWhole(let id, let origRect, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            let newRect = CGRect(x: origRect.minX + totalDX, y: origRect.minY + totalDY,
+                                 width: origRect.width, height: origRect.height)
+            document?.updateSpotlight(id: id, rect: newRect)
+
+        case .resizingSpotlight(let id, _, _):
+            if let lr = liveDragRect {
+                document?.updateSpotlight(id: id, rect: viewRectToNorm(lr.standardized))
+            }
+
         case .none:
             break
         }
@@ -1253,6 +1419,7 @@ class AnnotationOverlay: NSView {
             liveDragArrowStart = nil; liveDragArrowEnd = nil; liveDragRect = nil
             selectedArrowID = nil; selectedTextID = nil
             selectedShapeID = nil; selectedBlurID = nil; selectedHighlightID = nil
+            selectedSpotlightID = nil
             needsDisplay = true; return
         }
         super.keyDown(with: event)
@@ -1264,6 +1431,7 @@ class AnnotationOverlay: NSView {
         if let id = selectedShapeID     { document?.removeShape(id: id);          selectedShapeID = nil }
         if let id = selectedBlurID      { document?.removeBlurRegion(id: id);     selectedBlurID  = nil }
         if let id = selectedHighlightID { document?.removeHighlight(id: id);      selectedHighlightID = nil }
+        if let id = selectedSpotlightID { document?.removeSpotlight(id: id);      selectedSpotlightID = nil }
         needsDisplay = true
     }
 
@@ -1337,6 +1505,16 @@ class AnnotationOverlay: NSView {
                 return menu
             }
         }
+        for s in spotlights.sorted(by: { $0.zOrder > $1.zOrder }) {
+            if viewRect(for: s.rect).standardized.contains(loc) {
+                selectedSpotlightID = s.id; needsDisplay = true
+                let del = NSMenuItem(title: "Delete Spotlight", action: #selector(deleteSelectedItem(_:)),
+                                     keyEquivalent: "")
+                del.target = self; menu.addItem(del)
+                addArrangeItems(to: menu)
+                return menu
+            }
+        }
         // Generic copy option.
         let copy = NSMenuItem(title: "Copy Image", action: #selector(copyImageAction(_:)),
                               keyEquivalent: "")
@@ -1356,7 +1534,7 @@ class AnnotationOverlay: NSView {
 
     private func selectedAnnotationID() -> UUID? {
         selectedArrowID ?? selectedTextID ?? selectedShapeID
-            ?? selectedBlurID ?? selectedHighlightID
+            ?? selectedBlurID ?? selectedHighlightID ?? selectedSpotlightID
     }
 
     private func addArrangeItems(to menu: NSMenu) {
@@ -1495,6 +1673,14 @@ class AnnotationOverlay: NSView {
         guard let id = selectedHighlightID else { return }
         document?.updateHighlight(id: id, color: color, opacity: opacity)
     }
+
+    /// Update the currently selected spotlight's properties.
+    func updateSelectedSpotlight(overlayColor: NSColor? = nil, overlayOpacity: CGFloat? = nil,
+                                  shapeType: ShapeType? = nil) {
+        guard let id = selectedSpotlightID else { return }
+        document?.updateSpotlight(id: id, overlayColor: overlayColor,
+                                  overlayOpacity: overlayOpacity, shapeType: shapeType)
+    }
 }
 
 // MARK: - DragState helpers
@@ -1521,6 +1707,11 @@ fileprivate extension AnnotationOverlay.DragState {
     func isMovingOrResizingHighlight(id: UUID) -> Bool {
         if case .movingHighlightWhole(let hid, _, _) = self { return hid == id }
         if case .resizingHighlight(let hid, _, _) = self { return hid == id }
+        return false
+    }
+    func isMovingOrResizingSpotlight(id: UUID) -> Bool {
+        if case .movingSpotlightWhole(let sid, _, _) = self { return sid == id }
+        if case .resizingSpotlight(let sid, _, _) = self { return sid == id }
         return false
     }
 }

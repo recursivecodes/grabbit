@@ -89,6 +89,7 @@ extension GrabbitDocument {
         var img = (borderEnabled && borderWeight > 0) ? withBorder(currentImage) : currentImage
         img = withBlurRegions(img)
         img = withHighlights(img)
+        img = withSpotlights(img)
         img = withArrows(img, displayWidth: displayWidth)
         img = withTexts(img, displayWidth: displayWidth)
         img = withShapes(img, displayWidth: displayWidth)
@@ -251,6 +252,30 @@ extension GrabbitDocument {
                 let rect   = CGRect(origin: origin, size: sz).standardized
                 h.color.withAlphaComponent(min(max(h.opacity, 0.05), 0.85)).setFill()
                 NSBezierPath(rect: rect).fill()
+            }
+        }
+    }
+
+    // MARK: - Spotlights
+
+    func withSpotlights(_ base: NSImage) -> NSImage {
+        guard !spotlights.isEmpty else { return base }
+        return drawOverBase(base) { size in
+            for s in self.spotlights.sorted(by: { $0.zOrder < $1.zOrder }) {
+                let origin = CGPoint(x: s.rect.origin.x * size.width,
+                                     y: s.rect.origin.y * size.height)
+                let sz = CGSize(width: s.rect.width * size.width,
+                                height: s.rect.height * size.height)
+                let spotRect = CGRect(origin: origin, size: sz).standardized
+                let outer = NSBezierPath(rect: CGRect(origin: .zero, size: size))
+                switch s.shapeType {
+                case .rectangle:        outer.appendRect(spotRect)
+                case .circle:           outer.appendOval(in: spotRect)
+                case .roundedRectangle: outer.appendRoundedRect(spotRect, xRadius: 10, yRadius: 10)
+                }
+                outer.windingRule = .evenOdd
+                s.overlayColor.withAlphaComponent(min(max(s.overlayOpacity, 0.05), 0.95)).setFill()
+                outer.fill()
             }
         }
     }

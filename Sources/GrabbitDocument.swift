@@ -50,6 +50,9 @@ class GrabbitDocument: NSDocument {
     var shapeFillColor:    NSColor
     var highlightColor:    NSColor
     var highlightOpacity:  CGFloat
+    var spotlightOverlayColor:   NSColor
+    var spotlightOverlayOpacity: CGFloat
+    var spotlightShapeType:      ShapeType
 
     // Annotation arrays.
     private(set) var arrows:          [Arrow]          = []
@@ -57,6 +60,7 @@ class GrabbitDocument: NSDocument {
     private(set) var shapes:          [Shape]          = []
     private(set) var blurRegions:     [BlurRegion]     = []
     private(set) var highlights:      [Highlight]      = []
+    private(set) var spotlights:      [Spotlight]      = []
 
     // Z-order counter — only ever incremented, never decremented.
     private var zOrderCounter: Int = 0
@@ -112,6 +116,9 @@ class GrabbitDocument: NSDocument {
         shapeFillColor     = loadColor(Prefs.shapeFillColor,              default: .clear)
         highlightColor     = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
         highlightOpacity   = 0.4
+        spotlightOverlayColor   = .black
+        spotlightOverlayOpacity = 0.5
+        spotlightShapeType      = .rectangle
 
         super.init()
         // A freshly captured/opened image is immediately dirty — it hasn't been saved yet.
@@ -146,6 +153,9 @@ class GrabbitDocument: NSDocument {
         shapeFillColor     = loadColor(Prefs.shapeFillColor,              default: .clear)
         highlightColor     = NSColor(red: 1.0, green: 0.95, blue: 0.0, alpha: 1.0)
         highlightOpacity   = 0.4
+        spotlightOverlayColor   = .black
+        spotlightOverlayOpacity = 0.5
+        spotlightShapeType      = .rectangle
 
         super.init()
     }
@@ -187,6 +197,7 @@ class GrabbitDocument: NSDocument {
         // Clear any stale annotations from a previous load.
         arrows.removeAll(); textAnnotations.removeAll()
         shapes.removeAll(); blurRegions.removeAll(); highlights.removeAll()
+        spotlights.removeAll()
     }
 
     // MARK: Write — saving the rendered flat image
@@ -295,6 +306,7 @@ class GrabbitDocument: NSDocument {
         let prevShapes      = shapes
         let prevBlurs       = blurRegions
         let prevHighlights  = highlights
+        let prevSpotlights  = spotlights
         let prevZOrder      = zOrderCounter
 
         undoManager?.registerUndo(withTarget: self) { doc in
@@ -302,7 +314,7 @@ class GrabbitDocument: NSDocument {
                 image: prevImage, hasImage: prevHasImage,
                 arrows: prevArrows, texts: prevTexts,
                 shapes: prevShapes, blurs: prevBlurs,
-                highlights: prevHighlights, zOrder: prevZOrder
+                highlights: prevHighlights, spotlights: prevSpotlights, zOrder: prevZOrder
             )
         }
         undoManager?.setActionName("Load Image")
@@ -311,6 +323,7 @@ class GrabbitDocument: NSDocument {
         hasImage     = true
         arrows.removeAll(); textAnnotations.removeAll()
         shapes.removeAll(); blurRegions.removeAll(); highlights.removeAll()
+        spotlights.removeAll()
         zOrderCounter = 0
         updateChangeCount(.changeDone)
         onImageChanged?()
@@ -320,7 +333,7 @@ class GrabbitDocument: NSDocument {
     private func restoreFullState(image: NSImage, hasImage: Bool,
                                   arrows: [Arrow], texts: [TextAnnotation],
                                   shapes: [Shape], blurs: [BlurRegion],
-                                  highlights: [Highlight], zOrder: Int) {
+                                  highlights: [Highlight], spotlights: [Spotlight], zOrder: Int) {
         let prevImage      = currentImage
         let prevHasImage   = self.hasImage
         let prevArrows     = self.arrows
@@ -328,6 +341,7 @@ class GrabbitDocument: NSDocument {
         let prevShapes     = self.shapes
         let prevBlurs      = blurRegions
         let prevHighlights = self.highlights
+        let prevSpotlights = self.spotlights
         let prevZOrder     = zOrderCounter
 
         undoManager?.registerUndo(withTarget: self) { doc in
@@ -335,7 +349,7 @@ class GrabbitDocument: NSDocument {
                 image: prevImage, hasImage: prevHasImage,
                 arrows: prevArrows, texts: prevTexts,
                 shapes: prevShapes, blurs: prevBlurs,
-                highlights: prevHighlights, zOrder: prevZOrder
+                highlights: prevHighlights, spotlights: prevSpotlights, zOrder: prevZOrder
             )
         }
 
@@ -346,6 +360,7 @@ class GrabbitDocument: NSDocument {
         self.shapes       = shapes
         blurRegions       = blurs
         self.highlights   = highlights
+        self.spotlights   = spotlights
         zOrderCounter     = zOrder
         updateChangeCount(.changeDone)
         onImageChanged?()
@@ -618,6 +633,48 @@ class GrabbitDocument: NSDocument {
         onAnnotationsChanged?()
     }
 
+    func addSpotlight(_ spotlight: Spotlight) {
+        undoManager?.registerUndo(withTarget: self) { [id = spotlight.id] doc in
+            doc.removeSpotlight(id: id)
+        }
+        undoManager?.setActionName("Add Spotlight")
+        spotlights.append(spotlight)
+        updateChangeCount(.changeDone)
+        onAnnotationsChanged?()
+    }
+
+    func removeSpotlight(id: UUID) {
+        guard let idx = spotlights.firstIndex(where: { $0.id == id }) else { return }
+        let s = spotlights[idx]
+        undoManager?.registerUndo(withTarget: self) { doc in
+            doc.addSpotlight(s)
+        }
+        undoManager?.setActionName("Delete Spotlight")
+        spotlights.remove(at: idx)
+        updateChangeCount(.changeDone)
+        onAnnotationsChanged?()
+    }
+
+    func updateSpotlight(id: UUID, rect: CGRect? = nil,
+                         overlayColor: NSColor? = nil, overlayOpacity: CGFloat? = nil,
+                         shapeType: ShapeType? = nil) {
+        guard let idx = spotlights.firstIndex(where: { $0.id == id }) else { return }
+        let prev = spotlights[idx]
+        undoManager?.registerUndo(withTarget: self) { doc in
+            doc.updateSpotlight(id: id, rect: prev.rect,
+                                overlayColor: prev.overlayColor,
+                                overlayOpacity: prev.overlayOpacity,
+                                shapeType: prev.shapeType)
+        }
+        undoManager?.setActionName("Edit Spotlight")
+        if let v = rect           { spotlights[idx].rect           = v }
+        if let v = overlayColor   { spotlights[idx].overlayColor   = v }
+        if let v = overlayOpacity { spotlights[idx].overlayOpacity = v }
+        if let v = shapeType      { spotlights[idx].shapeType      = v }
+        updateChangeCount(.changeDone)
+        onAnnotationsChanged?()
+    }
+
     // MARK: - Z-order mutations (undoable)
 
     func setZOrders(_ pairs: [(id: UUID, z: Int)]) {
@@ -641,6 +698,7 @@ class GrabbitDocument: NSDocument {
         shapes.forEach          { all.append(($0.id, $0.zOrder)) }
         blurRegions.forEach     { all.append(($0.id, $0.zOrder)) }
         highlights.forEach      { all.append(($0.id, $0.zOrder)) }
+        spotlights.forEach      { all.append(($0.id, $0.zOrder)) }
         return all.sorted { $0.1 < $1.1 }
     }
 
@@ -650,6 +708,7 @@ class GrabbitDocument: NSDocument {
         if let i = shapes.firstIndex(where: { $0.id == id })          { shapes[i].zOrder = z }
         if let i = blurRegions.firstIndex(where: { $0.id == id })     { blurRegions[i].zOrder = z }
         if let i = highlights.firstIndex(where: { $0.id == id })      { highlights[i].zOrder = z }
+        if let i = spotlights.firstIndex(where: { $0.id == id })      { spotlights[i].zOrder = z }
     }
 
     // MARK: - Preferences persistence

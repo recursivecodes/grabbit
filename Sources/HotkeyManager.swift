@@ -226,16 +226,18 @@ struct ToolShortcutsConfig {
     var shape:     HotkeyConfig
     var blur:      HotkeyConfig
     var highlight: HotkeyConfig
+    var spotlight: HotkeyConfig
 
     static let `default` = ToolShortcutsConfig(
-        crop:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey | optionKey)),
-        resize:    HotkeyConfig(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | optionKey)),
-        ocr:       HotkeyConfig(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(cmdKey | optionKey)),
-        arrow:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(cmdKey | optionKey)),
-        text:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(cmdKey | optionKey)),
-        shape:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(cmdKey | optionKey)),
-        blur:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(cmdKey | optionKey)),
-        highlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_H), modifiers: UInt32(cmdKey | optionKey))
+        crop:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey | shiftKey)),
+        resize:    HotkeyConfig(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | shiftKey)),
+        ocr:       HotkeyConfig(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(optionKey | shiftKey)),
+        arrow:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(optionKey | shiftKey)),
+        text:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(optionKey | shiftKey)),
+        shape:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(optionKey | shiftKey)),
+        blur:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(optionKey | shiftKey)),
+        highlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_H), modifiers: UInt32(optionKey | shiftKey)),
+        spotlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(optionKey | shiftKey))
     )
 
     private static let prefix = "grabbit.toolShortcut."
@@ -258,7 +260,8 @@ struct ToolShortcutsConfig {
             text:      loadTool("text",      fallback: d.text),
             shape:     loadTool("shape",     fallback: d.shape),
             blur:      loadTool("blur",      fallback: d.blur),
-            highlight: loadTool("highlight", fallback: d.highlight)
+            highlight: loadTool("highlight", fallback: d.highlight),
+            spotlight: loadTool("spotlight", fallback: d.spotlight)
         )
     }
 
@@ -276,5 +279,6 @@ struct ToolShortcutsConfig {
         saveTool("shape",     shape)
         saveTool("blur",      blur)
         saveTool("highlight", highlight)
+        saveTool("spotlight", spotlight)
     }
 }

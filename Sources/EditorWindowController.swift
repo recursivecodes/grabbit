@@ -16,11 +16,12 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     var annotationOverlay:       AnnotationOverlay!
     private var canvas:          CanvasView!
     private var sidebar:         TabbedEditorSidebar!
-    private var arrowToolButton: NSButton!
-    private var textToolButton:  NSButton!
-    private var shapeToolButton: NSButton!
-    private var blurToolButton:  NSButton!
+    private var arrowToolButton:     NSButton!
+    private var textToolButton:      NSButton!
+    private var shapeToolButton:     NSButton!
+    private var blurToolButton:      NSButton!
     private var highlightToolButton: NSButton!
+    private var spotlightToolButton: NSButton!
     private var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
     private var cropToolButton:   NSButton!
@@ -51,8 +52,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     private var shapeFillColorWell:      NSColorWell!
     private var blurIntensitySlider:     NSSlider!;  private var blurIntensityLabel:     NSTextField!
     private var blurStylePopup:          NSPopUpButton!
-    private var highlightColorWell:      NSColorWell!
-    private var highlightOpacitySlider:  NSSlider!;  private var highlightOpacityLabel:  NSTextField!
+    private var highlightColorWell:          NSColorWell!
+    private var highlightOpacitySlider:      NSSlider!;  private var highlightOpacityLabel:      NSTextField!
+    private var spotlightShapePopup:         NSPopUpButton!
+    private var spotlightOverlayColorWell:   NSColorWell!
+    private var spotlightOpacitySlider:      NSSlider!;  private var spotlightOpacityLabel:      NSTextField!
 
     private var toolMode: ToolMode = .none
     private var toolShortcuts = ToolShortcutsConfig.load()
@@ -164,21 +168,23 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         cv.translatesAutoresizingMaskIntoConstraints = false
 
         // ── Toolbar buttons ──────────────────────────────────────────────────────
-        let arrowBtn     = makeToolButton("Arrow")
-        let textBtn      = makeToolButton("Text")
-        let shapeBtn     = makeToolButton("Shape")
-        let cropBtn      = makeToolButton("Crop")
-        let resizeBtn    = makeToolButton("Resize")
-        let ocrBtn       = makeToolButton("Extract Text")
-        let blurBtn      = makeToolButton("Blur")
-        let highlightBtn = makeToolButton("Highlight")
-        cropBtn.toolTip      = "Crop image"
-        resizeBtn.toolTip    = "Resize image"
-        ocrBtn.toolTip       = "Drag a region to extract text (OCR)"
-        blurBtn.toolTip      = "Blur / pixelate a region"
-        highlightBtn.toolTip = "Highlight a region"
+        let arrowBtn      = makeToolButton("Arrow")
+        let textBtn       = makeToolButton("Text")
+        let shapeBtn      = makeToolButton("Shape")
+        let cropBtn       = makeToolButton("Crop")
+        let resizeBtn     = makeToolButton("Resize")
+        let ocrBtn        = makeToolButton("Extract Text")
+        let blurBtn       = makeToolButton("Blur")
+        let highlightBtn  = makeToolButton("Highlight")
+        let spotlightBtn  = makeToolButton("Spotlight")
+        cropBtn.toolTip       = "Crop image"
+        resizeBtn.toolTip     = "Resize image"
+        ocrBtn.toolTip        = "Drag a region to extract text (OCR)"
+        blurBtn.toolTip       = "Blur / pixelate a region"
+        highlightBtn.toolTip  = "Highlight a region"
+        spotlightBtn.toolTip  = "Spotlight a region (dims surrounding area)"
 
-        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, ocrBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn])
+        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, ocrBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn, spotlightBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -305,6 +311,17 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         let highlightOpacitySliderLocal = sld(5, 85, Double(doc.highlightOpacity * 100))
         let highlightOpacityLabelLocal  = vlbl("\(Int(doc.highlightOpacity * 100))%")
 
+        let spotlightShapePopupLocal = NSPopUpButton(frame: .zero, pullsDown: false)
+        spotlightShapePopupLocal.controlSize = .small
+        spotlightShapePopupLocal.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        spotlightShapePopupLocal.addItem(withTitle: "Rectangle")
+        spotlightShapePopupLocal.addItem(withTitle: "Circle")
+        spotlightShapePopupLocal.addItem(withTitle: "Rounded Rectangle")
+        spotlightShapePopupLocal.selectItem(at: 0)
+        let spotlightOverlayColorWellLocal   = well(doc.spotlightOverlayColor)
+        let spotlightOpacitySliderLocal      = sld(10, 90, Double(doc.spotlightOverlayOpacity * 100))
+        let spotlightOpacityLabelLocal       = vlbl("\(Int(doc.spotlightOverlayOpacity * 100))%")
+
         let sb = TabbedEditorSidebar(
             arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell,
             textFontPopup: tfPopup,
@@ -320,7 +337,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             blurStylePopup: blurStylePopupLocal,
             highlightColorWell: highlightColorWellLocal,
             highlightOpacitySlider: highlightOpacitySliderLocal,
-            highlightOpacityLabel: highlightOpacityLabelLocal)
+            highlightOpacityLabel: highlightOpacityLabelLocal,
+            spotlightShapePopup: spotlightShapePopupLocal,
+            spotlightOverlayColorWell: spotlightOverlayColorWellLocal,
+            spotlightOpacitySlider: spotlightOpacitySliderLocal,
+            spotlightOpacityLabel: spotlightOpacityLabelLocal)
         sb.translatesAutoresizingMaskIntoConstraints = false
         sb.addEffectSection("BORDER", toggle: bToggle)
         sb.addEffectRow("Weight", bwSlider, bwLabel)
@@ -349,8 +370,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
 
         // ── IUO assignments ──────────────────────────────────────────────────────
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
-        arrowToolButton = arrowBtn;  textToolButton = textBtn;  shapeToolButton = shapeBtn
+        arrowToolButton = arrowBtn;  textToolButton = textBtn;   shapeToolButton = shapeBtn
         blurToolButton = blurBtn;    highlightToolButton = highlightBtn
+        spotlightToolButton = spotlightBtn
         zoomScroll = zs;  zoomLabel = zl
         cropToolButton = cropBtn;  resizeToolButton = resizeBtn;  ocrToolButton = ocrBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
@@ -373,6 +395,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         highlightColorWell = highlightColorWellLocal
         highlightOpacitySlider = highlightOpacitySliderLocal
         highlightOpacityLabel  = highlightOpacityLabelLocal
+        spotlightShapePopup         = spotlightShapePopupLocal
+        spotlightOverlayColorWell   = spotlightOverlayColorWellLocal
+        spotlightOpacitySlider      = spotlightOpacitySliderLocal
+        spotlightOpacityLabel       = spotlightOpacityLabelLocal
 
         super.init(window: win)
         win.delegate = self
@@ -386,7 +412,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         resizeBtn.target    = self; resizeBtn.action    = #selector(resizeToolClicked(_:))
         ocrBtn.target       = self; ocrBtn.action       = #selector(toggleOCRTool(_:))
         blurBtn.target      = self; blurBtn.action      = #selector(toggleBlurTool(_:))
-        highlightBtn.target = self; highlightBtn.action = #selector(toggleHighlightTool(_:))
+        highlightBtn.target  = self; highlightBtn.action  = #selector(toggleHighlightTool(_:))
+        spotlightBtn.target  = self; spotlightBtn.action  = #selector(toggleSpotlightTool(_:))
         zoomInBtn.target    = self; zoomInBtn.action    = #selector(zoomIn)
         zoomOutBtn.target   = self; zoomOutBtn.action   = #selector(zoomOut)
         borderToggle.target = self; borderToggle.action = #selector(borderToggleChanged(_:))
@@ -409,6 +436,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         blurStylePopup.target          = self; blurStylePopup.action          = #selector(blurStyleChanged(_:))
         highlightColorWell.target      = self; highlightColorWell.action      = #selector(colorPanelChanged)
         highlightOpacitySlider.target  = self; highlightOpacitySlider.action  = #selector(highlightOpacityChanged(_:))
+        spotlightShapePopup.target     = self; spotlightShapePopup.action     = #selector(spotlightShapeChanged(_:))
+        spotlightOverlayColorWell.target = self; spotlightOverlayColorWell.action = #selector(colorPanelChanged)
+        spotlightOpacitySlider.target  = self; spotlightOpacitySlider.action  = #selector(spotlightOpacityChanged(_:))
 
         (zoomScroll as? ZoomableScrollView)?.onMagnificationChanged = { [weak self] in
             self?.updateZoomLabel()
@@ -434,8 +464,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         annotationOverlay.currentBorderWeight = document.shapeBorderWeight
         annotationOverlay.currentBorderColor  = document.shapeBorderColor
         annotationOverlay.currentFillColor    = document.shapeFillColor
-        annotationOverlay.currentHighlightColor   = document.highlightColor
-        annotationOverlay.currentHighlightOpacity = document.highlightOpacity
+        annotationOverlay.currentHighlightColor       = document.highlightColor
+        annotationOverlay.currentHighlightOpacity     = document.highlightOpacity
+        annotationOverlay.currentSpotlightOverlayColor   = document.spotlightOverlayColor
+        annotationOverlay.currentSpotlightOverlayOpacity = document.spotlightOverlayOpacity
+        annotationOverlay.currentSpotlightShapeType      = document.spotlightShapeType
 
         annotationOverlay.imageDisplayRectProvider = { [weak self] in
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
@@ -455,6 +488,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             case .blur:      self.annotationOverlay.activeTool = .blur
             case .highlight: self.annotationOverlay.activeTool = .highlight
             case .ocr:       self.annotationOverlay.activeTool = .ocr
+            case .spotlight: self.annotationOverlay.activeTool = .spotlight
             case .none:      self.annotationOverlay.activeTool = .none
             }
             self.window?.makeFirstResponder(self.annotationOverlay)
@@ -609,6 +643,17 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         }
     }
 
+    @objc private func toggleSpotlightTool(_ sender: NSButton) {
+        if sender.state == .on {
+            syncToolbarState(to: .spotlight)
+            annotationOverlay.activeTool = .spotlight
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            syncToolbarState(to: .none)
+            annotationOverlay.activeTool = .none
+        }
+    }
+
     @objc private func toggleCropTool(_ sender: NSButton) {
         if sender.state == .on {
             syncToolbarState(to: .none)   // crop has no annotation tool equivalent
@@ -630,6 +675,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         blurToolButton.state      = tool == .blur      ? .on : .off
         highlightToolButton.state = tool == .highlight ? .on : .off
         ocrToolButton.state       = tool == .ocr       ? .on : .off
+        spotlightToolButton.state = tool == .spotlight ? .on : .off
         switch tool {
         case .arrow:     toolMode = .arrow
         case .text:      toolMode = .text
@@ -637,6 +683,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         case .blur:      toolMode = .blur
         case .highlight: toolMode = .highlight
         case .ocr:       toolMode = .ocr
+        case .spotlight: toolMode = .spotlight
         case .none:      toolMode = .none
         }
         sidebar.setToolMode(toolMode)
@@ -1164,6 +1211,23 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         annotationOverlay.needsDisplay = true
     }
 
+    @objc private func spotlightShapeChanged(_ popup: NSPopUpButton) {
+        let types: [ShapeType] = [.rectangle, .circle, .roundedRectangle]
+        guard popup.indexOfSelectedItem >= 0, popup.indexOfSelectedItem < types.count else { return }
+        grabbitDocument.spotlightShapeType = types[popup.indexOfSelectedItem]
+        annotationOverlay.currentSpotlightShapeType = grabbitDocument.spotlightShapeType
+        annotationOverlay.updateSelectedSpotlight(shapeType: grabbitDocument.spotlightShapeType)
+        annotationOverlay.needsDisplay = true
+    }
+
+    @objc private func spotlightOpacityChanged(_ s: NSSlider) {
+        grabbitDocument.spotlightOverlayOpacity = CGFloat(s.doubleValue) / 100
+        spotlightOpacityLabel.stringValue = fmtPct(grabbitDocument.spotlightOverlayOpacity)
+        annotationOverlay.currentSpotlightOverlayOpacity = grabbitDocument.spotlightOverlayOpacity
+        annotationOverlay.updateSelectedSpotlight(overlayOpacity: grabbitDocument.spotlightOverlayOpacity)
+        annotationOverlay.needsDisplay = true
+    }
+
     @objc private func colorPanelChanged() {
         if borderColorWell.isActive {
             grabbitDocument.borderColor = borderColorWell.color; refreshBaseImage()
@@ -1193,6 +1257,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             grabbitDocument.highlightColor = highlightColorWell.color
             annotationOverlay.currentHighlightColor = grabbitDocument.highlightColor
             annotationOverlay.updateSelectedHighlight(color: grabbitDocument.highlightColor)
+        } else if spotlightOverlayColorWell.isActive {
+            grabbitDocument.spotlightOverlayColor = spotlightOverlayColorWell.color
+            annotationOverlay.currentSpotlightOverlayColor = grabbitDocument.spotlightOverlayColor
+            annotationOverlay.updateSelectedSpotlight(overlayColor: grabbitDocument.spotlightOverlayColor)
+            annotationOverlay.needsDisplay = true
         }
         grabbitDocument.savePrefs()
     }
@@ -1259,6 +1328,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         shapeToolButton.isEnabled     = false
         blurToolButton.isEnabled      = false
         highlightToolButton.isEnabled = false
+        spotlightToolButton.isEnabled = false
         cropToolButton.isEnabled      = false
         resizeToolButton.isEnabled    = false
         ocrToolButton.isEnabled       = false
@@ -1272,6 +1342,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         shapeToolButton.isEnabled     = true
         blurToolButton.isEnabled      = true
         highlightToolButton.isEnabled = true
+        spotlightToolButton.isEnabled = true
         cropToolButton.isEnabled      = true
         resizeToolButton.isEnabled    = true
         ocrToolButton.isEnabled       = true
@@ -1366,6 +1437,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     @objc func activateShapeTool(_ sender: Any?)     { guard shapeToolButton.isEnabled     else { return }; shapeToolButton.performClick(nil) }
     @objc func activateBlurTool(_ sender: Any?)      { guard blurToolButton.isEnabled      else { return }; blurToolButton.performClick(nil) }
     @objc func activateHighlightTool(_ sender: Any?) { guard highlightToolButton.isEnabled else { return }; highlightToolButton.performClick(nil) }
+    @objc func activateSpotlightTool(_ sender: Any?) { guard spotlightToolButton.isEnabled else { return }; spotlightToolButton.performClick(nil) }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let toolSelectors: [Selector] = [
@@ -1373,6 +1445,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             #selector(activateOCRTool(_:)),    #selector(activateArrowTool(_:)),
             #selector(activateTextTool(_:)),   #selector(activateShapeTool(_:)),
             #selector(activateBlurTool(_:)),   #selector(activateHighlightTool(_:)),
+            #selector(activateSpotlightTool(_:)),
         ]
         if let action = menuItem.action, toolSelectors.contains(action) {
             return grabbitDocument.hasImage
@@ -1411,6 +1484,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         if matches(toolShortcuts.shape),     shapeToolButton.isEnabled     { shapeToolButton.performClick(nil);     return true }
         if matches(toolShortcuts.blur),      blurToolButton.isEnabled      { blurToolButton.performClick(nil);      return true }
         if matches(toolShortcuts.highlight), highlightToolButton.isEnabled { highlightToolButton.performClick(nil); return true }
+        if matches(toolShortcuts.spotlight), spotlightToolButton.isEnabled { spotlightToolButton.performClick(nil); return true }
         return false
     }
 

@@ -29,8 +29,9 @@ class SettingsWindowController: NSWindowController {
     private var arrowRecorder:     HotkeyRecorderView!
     private var textRecorder:      HotkeyRecorderView!
     private var shapeRecorder:     HotkeyRecorderView!
-    private var blurRecorder:      HotkeyRecorderView!
-    private var highlightRecorder: HotkeyRecorderView!
+    private var blurRecorder:       HotkeyRecorderView!
+    private var highlightRecorder:  HotkeyRecorderView!
+    private var spotlightRecorder:  HotkeyRecorderView!
 
     private static var shared: SettingsWindowController?
 
@@ -59,7 +60,7 @@ class SettingsWindowController: NSWindowController {
         self.currentToolShortcuts = toolShortcuts
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 565),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -203,6 +204,10 @@ class SettingsWindowController: NSWindowController {
         highlightRecorder  = makeRecorder(currentToolShortcuts.highlight)
         highlightRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.highlight = cfg }
 
+        let spotlightLabel = makeRowLabel("Spotlight")
+        spotlightRecorder  = makeRecorder(currentToolShortcuts.spotlight)
+        spotlightRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.spotlight = cfg }
+
         // ── Buttons ──────────────────────────────────────────────────────────────
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancelButton.keyEquivalent = "\u{1b}"
@@ -341,6 +346,15 @@ class SettingsWindowController: NSWindowController {
             highlightRecorder.widthAnchor.constraint(equalToConstant: 120),
             highlightRecorder.heightAnchor.constraint(equalToConstant: 26),
 
+            // Spotlight row
+            spotlightLabel.topAnchor.constraint(equalTo: highlightRecorder.bottomAnchor, constant: 8),
+            spotlightLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            spotlightLabel.widthAnchor.constraint(equalToConstant: 100),
+            spotlightRecorder.centerYAnchor.constraint(equalTo: spotlightLabel.centerYAnchor),
+            spotlightRecorder.leadingAnchor.constraint(equalTo: spotlightLabel.trailingAnchor, constant: 8),
+            spotlightRecorder.widthAnchor.constraint(equalToConstant: 120),
+            spotlightRecorder.heightAnchor.constraint(equalToConstant: 26),
+
             // Buttons
             cancelButton.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
             cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
@@ -363,6 +377,7 @@ class SettingsWindowController: NSWindowController {
         shapeRecorder?.setConfig(currentToolShortcuts.shape)
         blurRecorder?.setConfig(currentToolShortcuts.blur)
         highlightRecorder?.setConfig(currentToolShortcuts.highlight)
+        spotlightRecorder?.setConfig(currentToolShortcuts.spotlight)
         refreshPreview()
     }
 

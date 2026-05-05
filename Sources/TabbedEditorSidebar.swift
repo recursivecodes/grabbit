@@ -13,7 +13,8 @@ class TabbedEditorSidebar: NSView {
     private var textPropViews:    [NSView] = []
     private var shapePropViews:   [NSView] = []
     private var blurPropViews:    [NSView] = []
-    private var highlightPropViews: [NSView] = []
+    private var highlightPropViews:  [NSView] = []
+    private var spotlightPropViews:  [NSView] = []
 
     init(
         arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
@@ -29,7 +30,10 @@ class TabbedEditorSidebar: NSView {
         blurIntensitySlider: NSSlider, blurIntensityLabel: NSTextField,
         blurStylePopup: NSPopUpButton,
         highlightColorWell: NSColorWell,
-        highlightOpacitySlider: NSSlider, highlightOpacityLabel: NSTextField
+        highlightOpacitySlider: NSSlider, highlightOpacityLabel: NSTextField,
+        spotlightShapePopup: NSPopUpButton,
+        spotlightOverlayColorWell: NSColorWell,
+        spotlightOpacitySlider: NSSlider, spotlightOpacityLabel: NSTextField
     ) {
         tabControl = NSSegmentedControl(
             labels: ["Properties", "Effects"],
@@ -252,6 +256,27 @@ class TabbedEditorSidebar: NSView {
         propertiesStack.addArrangedSubview(highlightOpacityRow)
         highlightPropViews.append(highlightOpacityRow)
 
+        // ── Properties: spotlight tool section ───────────────────────────────────
+        let spotlightHeader = makeSectionBox("SPOTLIGHT")
+        spotlightHeader.isHidden = true
+        propertiesStack.addArrangedSubview(spotlightHeader)
+        spotlightPropViews.append(spotlightHeader)
+
+        let spotlightShapeRow = makeSidebarRow("Shape", spotlightShapePopup)
+        spotlightShapeRow.isHidden = true
+        propertiesStack.addArrangedSubview(spotlightShapeRow)
+        spotlightPropViews.append(spotlightShapeRow)
+
+        let spotlightColorRow = makeSidebarRow("Overlay", spotlightOverlayColorWell)
+        spotlightColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(spotlightColorRow)
+        spotlightPropViews.append(spotlightColorRow)
+
+        let spotlightOpacityRow = makeSidebarRow("Opacity", spotlightOpacitySlider, spotlightOpacityLabel)
+        spotlightOpacityRow.isHidden = true
+        propertiesStack.addArrangedSubview(spotlightOpacityRow)
+        spotlightPropViews.append(spotlightOpacityRow)
+
         // Start showing Properties tab
         effectsScroll.isHidden = true
 
@@ -285,16 +310,18 @@ class TabbedEditorSidebar: NSView {
 
     func setToolMode(_ mode: ToolMode) {
         noToolView.isHidden = mode != .none
-        let isArrow     = mode == .arrow
-        let isText      = mode == .text
-        let isShape     = mode == .shape
-        let isBlur      = mode == .blur
-        let isHighlight = mode == .highlight
+        let isArrow      = mode == .arrow
+        let isText       = mode == .text
+        let isShape      = mode == .shape
+        let isBlur       = mode == .blur
+        let isHighlight  = mode == .highlight
+        let isSpotlight  = mode == .spotlight
         arrowPropViews.forEach     { $0.isHidden = !isArrow }
         textPropViews.forEach      { $0.isHidden = !isText }
         shapePropViews.forEach     { $0.isHidden = !isShape }
         blurPropViews.forEach      { $0.isHidden = !isBlur }
         highlightPropViews.forEach { $0.isHidden = !isHighlight }
+        spotlightPropViews.forEach { $0.isHidden = !isSpotlight }
         if mode != .none && tabControl.selectedSegment != 0 {
             tabControl.selectedSegment = 0
             propertiesScroll.isHidden = false
