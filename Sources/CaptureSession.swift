@@ -124,7 +124,10 @@ class CaptureSession {
 
                 let cgImage = try await SCScreenshotManager.captureImage(
                     contentFilter: filter, configuration: config)
-                let screenshot = NSImage(cgImage: cgImage, size: screen.frame.size)
+                // Set NSImage.size to the actual pixel dimensions (not screen.frame.size
+                // which is in points). This keeps size == pixels throughout the pipeline.
+                let pixelSize = NSSize(width: cgImage.width, height: cgImage.height)
+                let screenshot = NSImage(cgImage: cgImage, size: pixelSize)
 
                 await MainActor.run {
                     OverlayWindowController.show(screenshot: screenshot, screen: screen)

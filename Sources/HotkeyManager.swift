@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 
 // MARK: - Hotkey configuration
@@ -52,6 +53,19 @@ struct HotkeyConfig: Equatable {
         let ud = UserDefaults.standard
         ud.set(Int(keyCode),   forKey: HotkeyConfig.quickKeyCodeKey)
         ud.set(Int(modifiers), forKey: HotkeyConfig.quickModifiersKey)
+    }
+
+    /// Single character used as NSMenuItem.keyEquivalent (lowercase letter or symbol).
+    var menuKeyEquivalent: String { keyName(for: keyCode).lowercased() }
+
+    /// NSEvent.ModifierFlags matching this config's modifier set, for NSMenuItem.
+    var menuModifierMask: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(cmdKey)     != 0 { flags.insert(.command) }
+        if modifiers & UInt32(optionKey)  != 0 { flags.insert(.option) }
+        if modifiers & UInt32(shiftKey)   != 0 { flags.insert(.shift) }
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        return flags
     }
 
     /// Human-readable string, e.g. "⌥⇧P"
@@ -198,5 +212,69 @@ class HotkeyManager {
 
     private func unregister(_ ref: inout EventHotKeyRef?) {
         if let r = ref { UnregisterEventHotKey(r); ref = nil }
+    }
+}
+
+// MARK: - Tool shortcut configuration
+
+struct ToolShortcutsConfig {
+    var crop:      HotkeyConfig
+    var resize:    HotkeyConfig
+    var ocr:       HotkeyConfig
+    var arrow:     HotkeyConfig
+    var text:      HotkeyConfig
+    var shape:     HotkeyConfig
+    var blur:      HotkeyConfig
+    var highlight: HotkeyConfig
+
+    static let `default` = ToolShortcutsConfig(
+        crop:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey | optionKey)),
+        resize:    HotkeyConfig(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | optionKey)),
+        ocr:       HotkeyConfig(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(cmdKey | optionKey)),
+        arrow:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(cmdKey | optionKey)),
+        text:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(cmdKey | optionKey)),
+        shape:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(cmdKey | optionKey)),
+        blur:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(cmdKey | optionKey)),
+        highlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_H), modifiers: UInt32(cmdKey | optionKey))
+    )
+
+    private static let prefix = "grabbit.toolShortcut."
+
+    static func load() -> ToolShortcutsConfig {
+        let ud = UserDefaults.standard
+        let d  = Self.default
+        func loadTool(_ name: String, fallback: HotkeyConfig) -> HotkeyConfig {
+            let kcKey = "\(prefix)\(name).keyCode"
+            let mKey  = "\(prefix)\(name).modifiers"
+            guard ud.object(forKey: kcKey) != nil else { return fallback }
+            return HotkeyConfig(keyCode:   UInt32(ud.integer(forKey: kcKey)),
+                                modifiers: UInt32(ud.integer(forKey: mKey)))
+        }
+        return ToolShortcutsConfig(
+            crop:      loadTool("crop",      fallback: d.crop),
+            resize:    loadTool("resize",    fallback: d.resize),
+            ocr:       loadTool("ocr",       fallback: d.ocr),
+            arrow:     loadTool("arrow",     fallback: d.arrow),
+            text:      loadTool("text",      fallback: d.text),
+            shape:     loadTool("shape",     fallback: d.shape),
+            blur:      loadTool("blur",      fallback: d.blur),
+            highlight: loadTool("highlight", fallback: d.highlight)
+        )
+    }
+
+    func save() {
+        let ud = UserDefaults.standard
+        func saveTool(_ name: String, _ cfg: HotkeyConfig) {
+            ud.set(Int(cfg.keyCode),   forKey: "\(ToolShortcutsConfig.prefix)\(name).keyCode")
+            ud.set(Int(cfg.modifiers), forKey: "\(ToolShortcutsConfig.prefix)\(name).modifiers")
+        }
+        saveTool("crop",      crop)
+        saveTool("resize",    resize)
+        saveTool("ocr",       ocr)
+        saveTool("arrow",     arrow)
+        saveTool("text",      text)
+        saveTool("shape",     shape)
+        saveTool("blur",      blur)
+        saveTool("highlight", highlight)
     }
 }

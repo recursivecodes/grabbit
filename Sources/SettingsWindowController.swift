@@ -6,6 +6,7 @@ import Carbon.HIToolbox
 protocol SettingsWindowControllerDelegate: AnyObject {
     func settingsDidUpdateHotkey(_ config: HotkeyConfig)
     func settingsDidUpdateQuickHotkey(_ config: HotkeyConfig)
+    func settingsDidUpdateToolShortcuts(_ shortcuts: ToolShortcutsConfig)
 }
 
 // MARK: - SettingsWindowController
@@ -13,23 +14,38 @@ protocol SettingsWindowControllerDelegate: AnyObject {
 class SettingsWindowController: NSWindowController {
     weak var delegate: SettingsWindowControllerDelegate?
 
-    private var currentConfig:      HotkeyConfig
-    private var currentQuickConfig: HotkeyConfig
+    private var currentConfig:        HotkeyConfig
+    private var currentQuickConfig:   HotkeyConfig
+    private var currentToolShortcuts: ToolShortcutsConfig
+
     private var hotkeyRecorder:      HotkeyRecorderView!
     private var quickHotkeyRecorder: HotkeyRecorderView!
-    private var previewLabel:      NSTextField!
-    private var quickPreviewLabel: NSTextField!
+    private var previewLabel:        NSTextField!
+    private var quickPreviewLabel:   NSTextField!
+
+    private var cropRecorder:      HotkeyRecorderView!
+    private var resizeRecorder:    HotkeyRecorderView!
+    private var ocrRecorder:       HotkeyRecorderView!
+    private var arrowRecorder:     HotkeyRecorderView!
+    private var textRecorder:      HotkeyRecorderView!
+    private var shapeRecorder:     HotkeyRecorderView!
+    private var blurRecorder:      HotkeyRecorderView!
+    private var highlightRecorder: HotkeyRecorderView!
 
     private static var shared: SettingsWindowController?
 
     static func show(currentConfig: HotkeyConfig,
                      quickConfig: HotkeyConfig,
+                     toolShortcuts: ToolShortcutsConfig,
                      delegate: SettingsWindowControllerDelegate) {
         if shared == nil {
-            shared = SettingsWindowController(config: currentConfig, quickConfig: quickConfig)
+            shared = SettingsWindowController(config: currentConfig,
+                                              quickConfig: quickConfig,
+                                              toolShortcuts: toolShortcuts)
         }
-        shared?.currentConfig      = currentConfig
-        shared?.currentQuickConfig = quickConfig
+        shared?.currentConfig        = currentConfig
+        shared?.currentQuickConfig   = quickConfig
+        shared?.currentToolShortcuts = toolShortcuts
         shared?.delegate = delegate
         shared?.refreshUI()
         shared?.showWindow(nil)
@@ -37,12 +53,13 @@ class SettingsWindowController: NSWindowController {
         shared?.window?.makeKeyAndOrderFront(nil)
     }
 
-    init(config: HotkeyConfig, quickConfig: HotkeyConfig) {
-        self.currentConfig      = config
-        self.currentQuickConfig = quickConfig
+    init(config: HotkeyConfig, quickConfig: HotkeyConfig, toolShortcuts: ToolShortcutsConfig) {
+        self.currentConfig        = config
+        self.currentQuickConfig   = quickConfig
+        self.currentToolShortcuts = toolShortcuts
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 565),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -62,7 +79,7 @@ class SettingsWindowController: NSWindowController {
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
-        // ── Section header ───────────────────────────────────────────────────────
+        // ── Capture shortcuts section header ─────────────────────────────────────
         let sectionLabel = NSTextField(labelWithString: "Keyboard Shortcuts")
         sectionLabel.font = .boldSystemFont(ofSize: 13)
         sectionLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -120,6 +137,72 @@ class SettingsWindowController: NSWindowController {
         quickPreviewLabel.translatesAutoresizingMaskIntoConstraints = false
         cv.addSubview(quickPreviewLabel)
 
+        // ── Separator ────────────────────────────────────────────────────────────
+        let sep = NSBox()
+        sep.boxType = .custom; sep.borderWidth = 0
+        sep.fillColor = NSColor.separatorColor
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(sep)
+
+        // ── Tool shortcuts section header ─────────────────────────────────────────
+        let toolSectionLabel = NSTextField(labelWithString: "Tool Shortcuts")
+        toolSectionLabel.font = .boldSystemFont(ofSize: 13)
+        toolSectionLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(toolSectionLabel)
+
+        let toolDescLabel = NSTextField(labelWithString: "Active while the editor window is focused.")
+        toolDescLabel.font = .systemFont(ofSize: 11)
+        toolDescLabel.textColor = .secondaryLabelColor
+        toolDescLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(toolDescLabel)
+
+        // ── Tool rows ─────────────────────────────────────────────────────────────
+        func makeRowLabel(_ title: String) -> NSTextField {
+            let lbl = NSTextField(labelWithString: title)
+            lbl.font = .systemFont(ofSize: 12)
+            lbl.translatesAutoresizingMaskIntoConstraints = false
+            cv.addSubview(lbl)
+            return lbl
+        }
+        func makeRecorder(_ config: HotkeyConfig) -> HotkeyRecorderView {
+            let rec = HotkeyRecorderView(config: config)
+            rec.translatesAutoresizingMaskIntoConstraints = false
+            cv.addSubview(rec)
+            return rec
+        }
+
+        let cropLabel      = makeRowLabel("Crop")
+        cropRecorder       = makeRecorder(currentToolShortcuts.crop)
+        cropRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.crop = cfg }
+
+        let resizeLabel    = makeRowLabel("Resize")
+        resizeRecorder     = makeRecorder(currentToolShortcuts.resize)
+        resizeRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.resize = cfg }
+
+        let ocrLabel       = makeRowLabel("Extract Text")
+        ocrRecorder        = makeRecorder(currentToolShortcuts.ocr)
+        ocrRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.ocr = cfg }
+
+        let arrowLabel     = makeRowLabel("Arrow")
+        arrowRecorder      = makeRecorder(currentToolShortcuts.arrow)
+        arrowRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.arrow = cfg }
+
+        let textLabel      = makeRowLabel("Text")
+        textRecorder       = makeRecorder(currentToolShortcuts.text)
+        textRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.text = cfg }
+
+        let shapeLabel     = makeRowLabel("Shape")
+        shapeRecorder      = makeRecorder(currentToolShortcuts.shape)
+        shapeRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.shape = cfg }
+
+        let blurLabel      = makeRowLabel("Blur")
+        blurRecorder       = makeRecorder(currentToolShortcuts.blur)
+        blurRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.blur = cfg }
+
+        let highlightLabel = makeRowLabel("Highlight")
+        highlightRecorder  = makeRecorder(currentToolShortcuts.highlight)
+        highlightRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.highlight = cfg }
+
         // ── Buttons ──────────────────────────────────────────────────────────────
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancelButton.keyEquivalent = "\u{1b}"
@@ -134,6 +217,7 @@ class SettingsWindowController: NSWindowController {
 
         // ── Layout ───────────────────────────────────────────────────────────────
         NSLayoutConstraint.activate([
+            // Capture shortcuts header
             sectionLabel.topAnchor.constraint(equalTo: cv.topAnchor, constant: 20),
             sectionLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
 
@@ -142,27 +226,27 @@ class SettingsWindowController: NSWindowController {
             descLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
 
             // Capture & Edit row
-            captureRowLabel.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 16),
+            captureRowLabel.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 14),
             captureRowLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
             captureRowLabel.widthAnchor.constraint(equalToConstant: 100),
 
             hotkeyRecorder.centerYAnchor.constraint(equalTo: captureRowLabel.centerYAnchor),
             hotkeyRecorder.leadingAnchor.constraint(equalTo: captureRowLabel.trailingAnchor, constant: 8),
             hotkeyRecorder.widthAnchor.constraint(equalToConstant: 140),
-            hotkeyRecorder.heightAnchor.constraint(equalToConstant: 28),
+            hotkeyRecorder.heightAnchor.constraint(equalToConstant: 26),
 
             previewLabel.centerYAnchor.constraint(equalTo: hotkeyRecorder.centerYAnchor),
             previewLabel.leadingAnchor.constraint(equalTo: hotkeyRecorder.trailingAnchor, constant: 10),
 
             // Quick Capture row
-            quickRowLabel.topAnchor.constraint(equalTo: captureRowLabel.bottomAnchor, constant: 20),
+            quickRowLabel.topAnchor.constraint(equalTo: captureRowLabel.bottomAnchor, constant: 16),
             quickRowLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
             quickRowLabel.widthAnchor.constraint(equalToConstant: 100),
 
             quickHotkeyRecorder.centerYAnchor.constraint(equalTo: quickRowLabel.centerYAnchor),
             quickHotkeyRecorder.leadingAnchor.constraint(equalTo: quickRowLabel.trailingAnchor, constant: 8),
             quickHotkeyRecorder.widthAnchor.constraint(equalToConstant: 140),
-            quickHotkeyRecorder.heightAnchor.constraint(equalToConstant: 28),
+            quickHotkeyRecorder.heightAnchor.constraint(equalToConstant: 26),
 
             quickPreviewLabel.centerYAnchor.constraint(equalTo: quickHotkeyRecorder.centerYAnchor),
             quickPreviewLabel.leadingAnchor.constraint(equalTo: quickHotkeyRecorder.trailingAnchor, constant: 10),
@@ -171,6 +255,93 @@ class SettingsWindowController: NSWindowController {
             quickDescLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
             quickDescLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
 
+            // Separator
+            sep.topAnchor.constraint(equalTo: quickDescLabel.bottomAnchor, constant: 16),
+            sep.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            sep.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            sep.heightAnchor.constraint(equalToConstant: 1),
+
+            // Tool shortcuts header
+            toolSectionLabel.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 14),
+            toolSectionLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+
+            toolDescLabel.topAnchor.constraint(equalTo: toolSectionLabel.bottomAnchor, constant: 4),
+            toolDescLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            toolDescLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+
+            // Crop row
+            cropLabel.topAnchor.constraint(equalTo: toolDescLabel.bottomAnchor, constant: 12),
+            cropLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            cropLabel.widthAnchor.constraint(equalToConstant: 100),
+            cropRecorder.centerYAnchor.constraint(equalTo: cropLabel.centerYAnchor),
+            cropRecorder.leadingAnchor.constraint(equalTo: cropLabel.trailingAnchor, constant: 8),
+            cropRecorder.widthAnchor.constraint(equalToConstant: 120),
+            cropRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Resize row
+            resizeLabel.topAnchor.constraint(equalTo: cropRecorder.bottomAnchor, constant: 8),
+            resizeLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            resizeLabel.widthAnchor.constraint(equalToConstant: 100),
+            resizeRecorder.centerYAnchor.constraint(equalTo: resizeLabel.centerYAnchor),
+            resizeRecorder.leadingAnchor.constraint(equalTo: resizeLabel.trailingAnchor, constant: 8),
+            resizeRecorder.widthAnchor.constraint(equalToConstant: 120),
+            resizeRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Extract Text row
+            ocrLabel.topAnchor.constraint(equalTo: resizeRecorder.bottomAnchor, constant: 8),
+            ocrLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            ocrLabel.widthAnchor.constraint(equalToConstant: 100),
+            ocrRecorder.centerYAnchor.constraint(equalTo: ocrLabel.centerYAnchor),
+            ocrRecorder.leadingAnchor.constraint(equalTo: ocrLabel.trailingAnchor, constant: 8),
+            ocrRecorder.widthAnchor.constraint(equalToConstant: 120),
+            ocrRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Arrow row
+            arrowLabel.topAnchor.constraint(equalTo: ocrRecorder.bottomAnchor, constant: 8),
+            arrowLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            arrowLabel.widthAnchor.constraint(equalToConstant: 100),
+            arrowRecorder.centerYAnchor.constraint(equalTo: arrowLabel.centerYAnchor),
+            arrowRecorder.leadingAnchor.constraint(equalTo: arrowLabel.trailingAnchor, constant: 8),
+            arrowRecorder.widthAnchor.constraint(equalToConstant: 120),
+            arrowRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Text row
+            textLabel.topAnchor.constraint(equalTo: arrowRecorder.bottomAnchor, constant: 8),
+            textLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            textLabel.widthAnchor.constraint(equalToConstant: 100),
+            textRecorder.centerYAnchor.constraint(equalTo: textLabel.centerYAnchor),
+            textRecorder.leadingAnchor.constraint(equalTo: textLabel.trailingAnchor, constant: 8),
+            textRecorder.widthAnchor.constraint(equalToConstant: 120),
+            textRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Shape row
+            shapeLabel.topAnchor.constraint(equalTo: textRecorder.bottomAnchor, constant: 8),
+            shapeLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            shapeLabel.widthAnchor.constraint(equalToConstant: 100),
+            shapeRecorder.centerYAnchor.constraint(equalTo: shapeLabel.centerYAnchor),
+            shapeRecorder.leadingAnchor.constraint(equalTo: shapeLabel.trailingAnchor, constant: 8),
+            shapeRecorder.widthAnchor.constraint(equalToConstant: 120),
+            shapeRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Blur row
+            blurLabel.topAnchor.constraint(equalTo: shapeRecorder.bottomAnchor, constant: 8),
+            blurLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            blurLabel.widthAnchor.constraint(equalToConstant: 100),
+            blurRecorder.centerYAnchor.constraint(equalTo: blurLabel.centerYAnchor),
+            blurRecorder.leadingAnchor.constraint(equalTo: blurLabel.trailingAnchor, constant: 8),
+            blurRecorder.widthAnchor.constraint(equalToConstant: 120),
+            blurRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Highlight row
+            highlightLabel.topAnchor.constraint(equalTo: blurRecorder.bottomAnchor, constant: 8),
+            highlightLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            highlightLabel.widthAnchor.constraint(equalToConstant: 100),
+            highlightRecorder.centerYAnchor.constraint(equalTo: highlightLabel.centerYAnchor),
+            highlightRecorder.leadingAnchor.constraint(equalTo: highlightLabel.trailingAnchor, constant: 8),
+            highlightRecorder.widthAnchor.constraint(equalToConstant: 120),
+            highlightRecorder.heightAnchor.constraint(equalToConstant: 26),
+
+            // Buttons
             cancelButton.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
             cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
 
@@ -184,6 +355,14 @@ class SettingsWindowController: NSWindowController {
     private func refreshUI() {
         hotkeyRecorder?.setConfig(currentConfig)
         quickHotkeyRecorder?.setConfig(currentQuickConfig)
+        cropRecorder?.setConfig(currentToolShortcuts.crop)
+        resizeRecorder?.setConfig(currentToolShortcuts.resize)
+        ocrRecorder?.setConfig(currentToolShortcuts.ocr)
+        arrowRecorder?.setConfig(currentToolShortcuts.arrow)
+        textRecorder?.setConfig(currentToolShortcuts.text)
+        shapeRecorder?.setConfig(currentToolShortcuts.shape)
+        blurRecorder?.setConfig(currentToolShortcuts.blur)
+        highlightRecorder?.setConfig(currentToolShortcuts.highlight)
         refreshPreview()
     }
 
@@ -199,6 +378,7 @@ class SettingsWindowController: NSWindowController {
     @objc private func save() {
         delegate?.settingsDidUpdateHotkey(currentConfig)
         delegate?.settingsDidUpdateQuickHotkey(currentQuickConfig)
+        delegate?.settingsDidUpdateToolShortcuts(currentToolShortcuts)
         close()
     }
 }

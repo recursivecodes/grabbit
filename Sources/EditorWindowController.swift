@@ -1,11 +1,12 @@
 import AppKit
+import Carbon.HIToolbox
 import ImageIO
 import UniformTypeIdentifiers
 import Vision
 
 // MARK: - EditorWindowController
 
-class EditorWindowController: NSWindowController, NSWindowDelegate {
+class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
 
     // MARK: Document
     private(set) var grabbitDocument: GrabbitDocument
@@ -54,6 +55,8 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var highlightOpacitySlider:  NSSlider!;  private var highlightOpacityLabel:  NSTextField!
 
     private var toolMode: ToolMode = .none
+    private var toolShortcuts = ToolShortcutsConfig.load()
+    private var toolShortcutMonitor: Any?
 
     // MARK: - Show helpers (used by CaptureSession / AppDelegate)
 
@@ -373,6 +376,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
 
         super.init(window: win)
         win.delegate = self
+        setupToolShortcutMonitor()
 
         // ── Wire targets ─────────────────────────────────────────────────────────
         arrowBtn.target     = self; arrowBtn.action     = #selector(toggleArrowTool(_:))
@@ -798,8 +802,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     private func showResizeDialog() {
         guard let win = window else { return }
         let img = grabbitDocument.currentImage
-        let origW = img.size.width
-        let origH = img.size.height
+        // Use the actual pixel dimensions from the CGImage backing, not NSImage.size
+        // which is in points and would show half the real pixel count on Retina displays.
+        let cgImg = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        let origW = cgImg.map { CGFloat($0.width)  } ?? img.size.width
+        let origH = cgImg.map { CGFloat($0.height) } ?? img.size.height
         let maxPx = Self.resizeMaxPx
 
         // ── Sheet window ────────────────────────────────────────────────────────
@@ -965,34 +972,53 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         window?.endSheet(sheet, returnCode: .OK)
 
         let img = grabbitDocument.currentImage
-        guard newW != img.size.width || newH != img.size.height else { return }
+        guard let srcCG = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        // Compare against actual pixel dimensions, not point-based NSImage.size.
+        guard newW != CGFloat(srcCG.width) || newH != CGFloat(srcCG.height) else { return }
 
-        // Draw the current image into a new bitmap at the target size.
-        let resized = NSImage(size: NSSize(width: newW, height: newH))
-        resized.lockFocus()
-        NSGraphicsContext.current?.imageInterpolation = .high
-        img.draw(in: NSRect(origin: .zero, size: NSSize(width: newW, height: newH)),
-                 from: NSRect(origin: .zero, size: img.size),
-                 operation: .copy, fraction: 1.0)
-        resized.unlockFocus()
+        // Draw into a CGContext at exactly the requested pixel dimensions.
+        guard let ctx = CGContext(
+                data: nil,
+                width: Int(newW), height: Int(newH),
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return }
+        ctx.interpolationQuality = .high
+        ctx.draw(srcCG, in: CGRect(x: 0, y: 0, width: newW, height: newH))
+        guard let resizedCG = ctx.makeImage() else { return }
+        // Set NSImage.size = pixel dimensions so the rest of the pipeline treats
+        // size as pixels (1 pt = 1 px), consistent with how we write to disk.
+        let resized = NSImage(cgImage: resizedCG, size: NSSize(width: newW, height: newH))
 
         grabbitDocument.applyResize(to: resized)
     }
 
     private func applyCrop(normRect: CGRect) {
         let img = grabbitDocument.currentImage
+        // Use actual CGImage pixel dimensions, not NSImage.size (which is in points
+        // and would be half the real pixel count on Retina displays).
+        guard let srcCG = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            deactivateCropTool(); return
+        }
+        let imgW = CGFloat(srcCG.width)
+        let imgH = CGFloat(srcCG.height)
         let pixelRect = CGRect(
-            x: normRect.origin.x * img.size.width,
-            y: normRect.origin.y * img.size.height,
-            width: normRect.size.width  * img.size.width,
-            height: normRect.size.height * img.size.height).integral
+            x: normRect.origin.x * imgW,
+            y: normRect.origin.y * imgH,
+            width: normRect.size.width  * imgW,
+            height: normRect.size.height * imgH).integral
         guard pixelRect.width > 1, pixelRect.height > 1 else { deactivateCropTool(); return }
 
-        let cropped = NSImage(size: pixelRect.size)
-        cropped.lockFocus()
-        img.draw(in: CGRect(origin: .zero, size: pixelRect.size),
-                 from: pixelRect, operation: .copy, fraction: 1.0)
-        cropped.unlockFocus()
+        // Crop directly from the CGImage (CGImage origin is bottom-left).
+        let srcRect = CGRect(
+            x: pixelRect.minX,
+            y: imgH - pixelRect.maxY,
+            width: pixelRect.width,
+            height: pixelRect.height)
+        guard let croppedCG = srcCG.cropping(to: srcRect) else { deactivateCropTool(); return }
+        // Set NSImage.size = pixel dimensions so the pipeline treats size as pixels.
+        let cropped = NSImage(cgImage: croppedCG, size: pixelRect.size)
 
         grabbitDocument.applyCrop(to: cropped)
         deactivateCropTool()
@@ -1319,6 +1345,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
+        if let m = toolShortcutMonitor { NSEvent.removeMonitor(m); toolShortcutMonitor = nil }
         NotificationCenter.default.removeObserver(self,
             name: NSColorPanel.colorDidChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self,
@@ -1327,6 +1354,73 @@ class EditorWindowController: NSWindowController, NSWindowDelegate {
         if NSDocumentController.shared.documents.filter({ $0 !== grabbitDocument }).isEmpty {
             NSApp.setActivationPolicy(.accessory)
         }
+    }
+
+    // MARK: - Menu tool actions (routed via responder chain from Tools menu)
+
+    @objc func activateCropTool(_ sender: Any?)      { guard cropToolButton.isEnabled      else { return }; cropToolButton.performClick(nil) }
+    @objc func activateResizeTool(_ sender: Any?)    { guard resizeToolButton.isEnabled    else { return }; resizeToolButton.performClick(nil) }
+    @objc func activateOCRTool(_ sender: Any?)       { guard ocrToolButton.isEnabled       else { return }; ocrToolButton.performClick(nil) }
+    @objc func activateArrowTool(_ sender: Any?)     { guard arrowToolButton.isEnabled     else { return }; arrowToolButton.performClick(nil) }
+    @objc func activateTextTool(_ sender: Any?)      { guard textToolButton.isEnabled      else { return }; textToolButton.performClick(nil) }
+    @objc func activateShapeTool(_ sender: Any?)     { guard shapeToolButton.isEnabled     else { return }; shapeToolButton.performClick(nil) }
+    @objc func activateBlurTool(_ sender: Any?)      { guard blurToolButton.isEnabled      else { return }; blurToolButton.performClick(nil) }
+    @objc func activateHighlightTool(_ sender: Any?) { guard highlightToolButton.isEnabled else { return }; highlightToolButton.performClick(nil) }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let toolSelectors: [Selector] = [
+            #selector(activateCropTool(_:)),   #selector(activateResizeTool(_:)),
+            #selector(activateOCRTool(_:)),    #selector(activateArrowTool(_:)),
+            #selector(activateTextTool(_:)),   #selector(activateShapeTool(_:)),
+            #selector(activateBlurTool(_:)),   #selector(activateHighlightTool(_:)),
+        ]
+        if let action = menuItem.action, toolSelectors.contains(action) {
+            return grabbitDocument.hasImage
+        }
+        return true
+    }
+
+    // MARK: - Tool keyboard shortcuts
+
+    func updateToolShortcuts(_ shortcuts: ToolShortcutsConfig) {
+        toolShortcuts = shortcuts
+    }
+
+    private func setupToolShortcutMonitor() {
+        toolShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  self.window?.isKeyWindow == true,
+                  self.window?.attachedSheet == nil else { return event }
+            let fr = self.window?.firstResponder
+            if fr is NSTextView || fr is NSTextField { return event }
+            if self.handleToolShortcut(event) { return nil }
+            return event
+        }
+    }
+
+    private func handleToolShortcut(_ event: NSEvent) -> Bool {
+        let mods = carbonModifiers(from: event.modifierFlags)
+        let kc   = UInt32(event.keyCode)
+        func matches(_ cfg: HotkeyConfig) -> Bool { cfg.keyCode == kc && cfg.modifiers == mods }
+
+        if matches(toolShortcuts.crop),      cropToolButton.isEnabled      { cropToolButton.performClick(nil);      return true }
+        if matches(toolShortcuts.resize),    resizeToolButton.isEnabled    { resizeToolButton.performClick(nil);    return true }
+        if matches(toolShortcuts.ocr),       ocrToolButton.isEnabled       { ocrToolButton.performClick(nil);       return true }
+        if matches(toolShortcuts.arrow),     arrowToolButton.isEnabled     { arrowToolButton.performClick(nil);     return true }
+        if matches(toolShortcuts.text),      textToolButton.isEnabled      { textToolButton.performClick(nil);      return true }
+        if matches(toolShortcuts.shape),     shapeToolButton.isEnabled     { shapeToolButton.performClick(nil);     return true }
+        if matches(toolShortcuts.blur),      blurToolButton.isEnabled      { blurToolButton.performClick(nil);      return true }
+        if matches(toolShortcuts.highlight), highlightToolButton.isEnabled { highlightToolButton.performClick(nil); return true }
+        return false
+    }
+
+    private func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
+        var mods: UInt32 = 0
+        if flags.contains(.command) { mods |= UInt32(cmdKey) }
+        if flags.contains(.option)  { mods |= UInt32(optionKey) }
+        if flags.contains(.shift)   { mods |= UInt32(shiftKey) }
+        if flags.contains(.control) { mods |= UInt32(controlKey) }
+        return mods
     }
 
     // MARK: - Utility

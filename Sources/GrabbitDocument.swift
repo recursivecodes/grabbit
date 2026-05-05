@@ -193,7 +193,32 @@ class GrabbitDocument: NSDocument {
 
     override func write(to url: URL, ofType typeName: String) throws {
         let image = rendered()
-        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        let w = Int(image.size.width)
+        let h = Int(image.size.height)
+        guard w > 0, h > 0 else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: unimpErr)
+        }
+        // Always render through a CGContext at exactly image.size pixels.
+        // cgImage(forProposedRect:nil,...) can return a differently-sized CGImage
+        // when the underlying image has non-72-DPI metadata (e.g. 144 DPI from a
+        // Retina screen capture), causing the saved file to have wrong dimensions.
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: unimpErr)
+        }
+        // Draw via NSGraphicsContext so NSImage renders its best representation
+        // into our fixed-size context (1 pt = 1 px, no Retina scaling).
+        let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsCtx
+        image.draw(in: CGRect(x: 0, y: 0, width: w, height: h))
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let cg = ctx.makeImage() else {
             throw NSError(domain: NSOSStatusErrorDomain, code: unimpErr)
         }
         let type: UTType
@@ -206,7 +231,12 @@ class GrabbitDocument: NSDocument {
             url as CFURL, type.identifier as CFString, 1, nil) else {
             throw NSError(domain: NSOSStatusErrorDomain, code: unimpErr)
         }
-        CGImageDestinationAddImage(dest, cg, nil)
+        // Explicit 72 DPI so Preview interprets pixel dimensions as-is.
+        let props: [CFString: Any] = [
+            kCGImagePropertyDPIWidth:  72,
+            kCGImagePropertyDPIHeight: 72,
+        ]
+        CGImageDestinationAddImage(dest, cg, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
             throw NSError(domain: NSOSStatusErrorDomain, code: unimpErr)
         }

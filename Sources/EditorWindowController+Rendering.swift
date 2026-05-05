@@ -34,10 +34,49 @@ func blurFilter(ciImage: CIImage, pixelRect: CGRect,
     }
 }
 
-// MARK: - GrabbitDocument rendering
+// MARK: - CGContext drawing helper
 //
-// All rendering reads annotation data directly from the document's arrays,
-// and uses a display-width provided by the caller for scale calculations.
+// All rendering uses CGContext directly so output pixel dimensions are exactly
+// NSImage.size (which we keep == pixel dimensions throughout the pipeline).
+// lockFocus() must NOT be used for export rendering because on a Retina display
+// it creates a 2× backing store, doubling the output pixel count.
+
+private func makeBitmapContext(width: Int, height: Int) -> CGContext? {
+    CGContext(
+        data: nil, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )
+}
+
+/// Draws `base` into a new CGContext of the same pixel size, then calls `draw`
+/// with an NSGraphicsContext wrapping that CGContext so AppKit drawing APIs
+/// (NSBezierPath, NSAttributedString, etc.) work at 1 pt = 1 px.
+/// Returns an NSImage whose size == pixel dimensions.
+private func drawOverBase(_ base: NSImage, draw: (CGSize) -> Void) -> NSImage {
+    let w = Int(base.size.width), h = Int(base.size.height)
+    guard w > 0, h > 0,
+          let baseCG = base.cgImage(forProposedRect: nil, context: nil, hints: nil),
+          let ctx = makeBitmapContext(width: w, height: h)
+    else { return base }
+
+    // Draw the base image.
+    ctx.draw(baseCG, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+    // Push an NSGraphicsContext so AppKit drawing APIs work in this CGContext.
+    // scaleFactor:1 means 1 pt == 1 px — no Retina doubling.
+    let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = nsCtx
+    draw(CGSize(width: w, height: h))
+    NSGraphicsContext.restoreGraphicsState()
+
+    guard let result = ctx.makeImage() else { return base }
+    return NSImage(cgImage: result, size: base.size)
+}
+
+// MARK: - GrabbitDocument rendering
 
 extension GrabbitDocument {
 
@@ -58,99 +97,119 @@ extension GrabbitDocument {
     }
 
     func withBorder(_ base: NSImage) -> NSImage {
-        let w = borderWeight
-        let out = NSImage(size: NSSize(width: base.size.width + w*2, height: base.size.height + w*2))
-        out.lockFocus()
-        borderColor.setFill()
-        NSRect(origin: .zero, size: out.size).fill()
-        base.draw(in: NSRect(x: w, y: w, width: base.size.width, height: base.size.height))
-        out.unlockFocus()
-        return out
+        let bw = borderWeight
+        let outW = Int(base.size.width  + bw * 2)
+        let outH = Int(base.size.height + bw * 2)
+        guard outW > 0, outH > 0,
+              let baseCG = base.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let ctx = makeBitmapContext(width: outW, height: outH)
+        else { return base }
+
+        // Fill border color.
+        if let cgColor = borderColor.cgColor as CGColor? {
+            ctx.setFillColor(cgColor)
+            ctx.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
+        }
+        // Draw base image inset by border width.
+        ctx.draw(baseCG, in: CGRect(x: bw, y: bw,
+                                    width: base.size.width, height: base.size.height))
+        guard let result = ctx.makeImage() else { return base }
+        return NSImage(cgImage: result,
+                       size: NSSize(width: outW, height: outH))
     }
 
     private func withArrows(_ base: NSImage, displayWidth: CGFloat) -> NSImage {
         guard !arrows.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        let scale = displayWidth > 0 ? base.size.width / displayWidth : 1
-        for arrow in arrows {
-            let s = CGPoint(x: arrow.start.x * base.size.width,  y: arrow.start.y * base.size.height)
-            let e = CGPoint(x: arrow.end.x   * base.size.width,  y: arrow.end.y   * base.size.height)
-            renderArrowIntoContext(from: s, to: e, weight: arrow.weight * scale, color: arrow.color)
+        return drawOverBase(base) { size in
+            let scale = displayWidth > 0 ? size.width / displayWidth : 1
+            for arrow in arrows {
+                let s = CGPoint(x: arrow.start.x * size.width,  y: arrow.start.y * size.height)
+                let e = CGPoint(x: arrow.end.x   * size.width,  y: arrow.end.y   * size.height)
+                renderArrowIntoContext(from: s, to: e,
+                                       weight: arrow.weight * scale, color: arrow.color)
+            }
         }
-        out.unlockFocus()
-        return out
     }
 
     private func withTexts(_ base: NSImage, displayWidth: CGFloat) -> NSImage {
         let texts = textAnnotations.filter { !$0.content.isEmpty }
         guard !texts.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        let scale = displayWidth > 0 ? base.size.width / displayWidth : 1
-        for ann in texts {
-            let pt   = CGPoint(x: ann.position.x * base.size.width,
-                               y: ann.position.y * base.size.height)
-            let font = NSFont.boldSystemFont(ofSize: ann.fontSize * scale)
-            if ann.outlineWeight > 0 {
+        return drawOverBase(base) { size in
+            let scale = displayWidth > 0 ? size.width / displayWidth : 1
+            for ann in texts {
+                let pt   = CGPoint(x: ann.position.x * size.width,
+                                   y: ann.position.y * size.height)
+                let font = NSFont.boldSystemFont(ofSize: ann.fontSize * scale)
+                if ann.outlineWeight > 0 {
+                    makeTextAttrStr(ann.content, font: font,
+                                    fontColor: .clear, outlineColor: ann.outlineColor,
+                                    outlineWeight: ann.outlineWeight * scale, strokeOnly: true)
+                        .draw(at: pt)
+                }
                 makeTextAttrStr(ann.content, font: font,
-                                fontColor: .clear, outlineColor: ann.outlineColor,
-                                outlineWeight: ann.outlineWeight * scale, strokeOnly: true)
+                                fontColor: ann.fontColor, outlineColor: ann.outlineColor,
+                                outlineWeight: ann.outlineWeight * scale, strokeOnly: false)
                     .draw(at: pt)
             }
-            makeTextAttrStr(ann.content, font: font,
-                            fontColor: ann.fontColor, outlineColor: ann.outlineColor,
-                            outlineWeight: ann.outlineWeight * scale, strokeOnly: false)
-                .draw(at: pt)
         }
-        out.unlockFocus()
-        return out
     }
 
     private func withShapes(_ base: NSImage, displayWidth: CGFloat) -> NSImage {
         guard !shapes.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        let scale = displayWidth > 0 ? base.size.width / displayWidth : 1
-        for shape in shapes {
-            let origin = CGPoint(x: shape.rect.origin.x * base.size.width,
-                                y: shape.rect.origin.y * base.size.height)
-            let size = CGSize(width: shape.rect.size.width * base.size.width,
-                             height: shape.rect.size.height * base.size.height)
-            var rect = CGRect(origin: origin, size: size).standardized
-            let path = NSBezierPath()
-            switch shape.shapeType {
-            case .circle:           path.appendOval(in: rect)
-            case .rectangle:        path.appendRect(rect)
-            case .roundedRectangle: path.appendRoundedRect(rect, xRadius: 10 * scale, yRadius: 10 * scale)
+        return drawOverBase(base) { size in
+            let scale = displayWidth > 0 ? size.width / displayWidth : 1
+            for shape in shapes {
+                let origin = CGPoint(x: shape.rect.origin.x * size.width,
+                                     y: shape.rect.origin.y * size.height)
+                let sz     = CGSize(width:  shape.rect.size.width  * size.width,
+                                    height: shape.rect.size.height * size.height)
+                let rect   = CGRect(origin: origin, size: sz).standardized
+                let path   = NSBezierPath()
+                switch shape.shapeType {
+                case .circle:           path.appendOval(in: rect)
+                case .rectangle:        path.appendRect(rect)
+                case .roundedRectangle: path.appendRoundedRect(rect,
+                                            xRadius: 10 * scale, yRadius: 10 * scale)
+                }
+                if shape.fillColor.alphaComponent > 0 {
+                    shape.fillColor.setFill(); path.fill()
+                }
+                shape.borderColor.setStroke()
+                path.lineWidth = shape.borderWeight * scale
+                path.stroke()
             }
-            if shape.fillColor.alphaComponent > 0 {
-                shape.fillColor.setFill(); path.fill()
-            }
-            shape.borderColor.setStroke()
-            path.lineWidth = shape.borderWeight * scale
-            path.stroke()
         }
-        out.unlockFocus()
-        return out
     }
 
     func withShadow(_ base: NSImage) -> NSImage {
         let blur = shadowBlur
         let pad  = blur * 2 + max(abs(shadowOffsetX), abs(shadowOffsetY)) + 8
-        let out  = NSImage(size: NSSize(width: base.size.width + pad*2, height: base.size.height + pad*2))
-        out.lockFocus()
+        let outW = Int(base.size.width  + pad * 2)
+        let outH = Int(base.size.height + pad * 2)
+        guard outW > 0, outH > 0,
+              let baseCG = base.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let ctx = makeBitmapContext(width: outW, height: outH)
+        else { return base }
+
+        let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsCtx
+
         let sh = NSShadow()
         sh.shadowBlurRadius = blur
         sh.shadowOffset     = NSSize(width: shadowOffsetX, height: shadowOffsetY)
         sh.shadowColor      = shadowColor.withAlphaComponent(shadowOpacity)
         sh.set()
-        base.draw(in: NSRect(x: pad, y: pad, width: base.size.width, height: base.size.height))
-        out.unlockFocus()
-        return out
+
+        // Draw base image into the padded canvas.
+        let baseImg = NSImage(cgImage: baseCG, size: base.size)
+        baseImg.draw(in: NSRect(x: pad, y: pad,
+                                width: base.size.width, height: base.size.height))
+
+        NSGraphicsContext.restoreGraphicsState()
+        guard let result = ctx.makeImage() else { return base }
+        return NSImage(cgImage: result,
+                       size: NSSize(width: outW, height: outH))
     }
 
     // MARK: - Blur regions
@@ -159,12 +218,7 @@ extension GrabbitDocument {
         guard !blurRegions.isEmpty else { return base }
         guard let baseCG = base.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return base }
         let w = CGFloat(baseCG.width), h = CGFloat(baseCG.height)
-        guard let ctx = CGContext(
-            data: nil, width: Int(w), height: Int(h),
-            bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return base }
+        guard let ctx = makeBitmapContext(width: Int(w), height: Int(h)) else { return base }
         ctx.draw(baseCG, in: CGRect(x: 0, y: 0, width: w, height: h))
         let ciContext = CIContext(cgContext: ctx, options: nil)
         let ciBase = CIImage(cgImage: baseCG)
@@ -188,20 +242,17 @@ extension GrabbitDocument {
 
     func withHighlights(_ base: NSImage) -> NSImage {
         guard !highlights.isEmpty else { return base }
-        let out = NSImage(size: base.size)
-        out.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: base.size))
-        for h in highlights.sorted(by: { $0.zOrder < $1.zOrder }) {
-            let origin = CGPoint(x: h.rect.origin.x * base.size.width,
-                                 y: h.rect.origin.y * base.size.height)
-            let size   = CGSize(width:  h.rect.size.width  * base.size.width,
-                                height: h.rect.size.height * base.size.height)
-            let rect   = CGRect(origin: origin, size: size).standardized
-            h.color.withAlphaComponent(min(max(h.opacity, 0.05), 0.85)).setFill()
-            NSBezierPath(rect: rect).fill()
+        return drawOverBase(base) { size in
+            for h in highlights.sorted(by: { $0.zOrder < $1.zOrder }) {
+                let origin = CGPoint(x: h.rect.origin.x * size.width,
+                                     y: h.rect.origin.y * size.height)
+                let sz     = CGSize(width:  h.rect.size.width  * size.width,
+                                    height: h.rect.size.height * size.height)
+                let rect   = CGRect(origin: origin, size: sz).standardized
+                h.color.withAlphaComponent(min(max(h.opacity, 0.05), 0.85)).setFill()
+                NSBezierPath(rect: rect).fill()
+            }
         }
-        out.unlockFocus()
-        return out
     }
 
     // MARK: - Arrow drawing helper (used by both rendering and overlay preview)

@@ -96,9 +96,9 @@ class OverlayWindowController: NSWindowController {
             if let cgWindow = CGWindowListCreateImage(
                 .null, .optionIncludingWindow, wid, imageOptions),
                cgWindow.width > 0, cgWindow.height > 0 {
-                let size = NSSize(width: CGFloat(cgWindow.width) / screen.backingScaleFactor,
-                                  height: CGFloat(cgWindow.height) / screen.backingScaleFactor)
-                let captured = NSImage(cgImage: cgWindow, size: size)
+                // Set size = pixel dimensions so the pipeline treats size as pixels.
+                let pixelSize = NSSize(width: cgWindow.width, height: cgWindow.height)
+                let captured = NSImage(cgImage: cgWindow, size: pixelSize)
                 dismiss()
                 CaptureSession.captureDidFinish(image: captured)
                 return
@@ -108,6 +108,8 @@ class OverlayWindowController: NSWindowController {
         }
 
         // ── Freehand crop path ───────────────────────────────────────────────────
+        // screenshot.size is now in pixels (set at capture time), so viewRect
+        // (in points) must be scaled to pixel coordinates.
         let scale = screen.backingScaleFactor
         let pixelRect = CGRect(
             x: viewRect.origin.x * scale,
@@ -125,7 +127,7 @@ class OverlayWindowController: NSWindowController {
             return
         }
 
-        let cropped = NSImage(cgImage: cgCropped, size: viewRect.size)
+        let cropped = NSImage(cgImage: cgCropped, size: NSSize(width: cgCropped.width, height: cgCropped.height))
         dismiss()
         CaptureSession.captureDidFinish(image: cropped)
     }

@@ -9,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
     private var quickCaptureMenuItem: NSMenuItem!
     private var updateMenuItem: NSMenuItem?
     private var latestReleaseURL: String?
+    // Ordered: crop, resize, ocr, arrow, text, shape, blur, highlight
+    private var toolMenuItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Become the notification delegate so banners appear on screen.
@@ -34,8 +36,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Grabbit", action: #selector(openAbout), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Settings…",     action: #selector(openSettings), keyEquivalent: ",")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Close Window", action: #selector(closeCurrentWindow), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Close Window",  action: #selector(closeCurrentWindow), keyEquivalent: "q")
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
@@ -58,6 +61,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
+
+        let toolsItem = NSMenuItem(title: "Tools", action: nil, keyEquivalent: "")
+        toolsItem.submenu = buildToolsMenu()
+        mainMenu.addItem(toolsItem)
 
         NSApp.mainMenu = mainMenu
     }
@@ -275,13 +282,56 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         AboutWindowController.show()
     }
 
+    // MARK: - Tools menu
+
+    private func buildToolsMenu() -> NSMenu {
+        let menu = NSMenu(title: "Tools")
+        let sc = ToolShortcutsConfig.load()
+
+        func addTool(_ title: String, action: Selector, config: HotkeyConfig) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: config.menuKeyEquivalent)
+            item.keyEquivalentModifierMask = config.menuModifierMask
+            menu.addItem(item)
+            return item
+        }
+
+        toolMenuItems = [
+            addTool("Crop",         action: #selector(EditorWindowController.activateCropTool(_:)),      config: sc.crop),
+            addTool("Resize",       action: #selector(EditorWindowController.activateResizeTool(_:)),    config: sc.resize),
+            addTool("Extract Text", action: #selector(EditorWindowController.activateOCRTool(_:)),       config: sc.ocr),
+        ]
+        menu.addItem(.separator())
+        toolMenuItems += [
+            addTool("Arrow",        action: #selector(EditorWindowController.activateArrowTool(_:)),     config: sc.arrow),
+            addTool("Text",         action: #selector(EditorWindowController.activateTextTool(_:)),      config: sc.text),
+            addTool("Shape",        action: #selector(EditorWindowController.activateShapeTool(_:)),     config: sc.shape),
+            addTool("Blur",         action: #selector(EditorWindowController.activateBlurTool(_:)),      config: sc.blur),
+            addTool("Highlight",    action: #selector(EditorWindowController.activateHighlightTool(_:)), config: sc.highlight),
+        ]
+
+        return menu
+    }
+
+    private func updateToolMenuKeyEquivalents(_ shortcuts: ToolShortcutsConfig) {
+        let configs: [HotkeyConfig] = [
+            shortcuts.crop, shortcuts.resize, shortcuts.ocr,
+            shortcuts.arrow, shortcuts.text, shortcuts.shape,
+            shortcuts.blur, shortcuts.highlight,
+        ]
+        for (item, config) in zip(toolMenuItems, configs) {
+            item.keyEquivalent = config.menuKeyEquivalent
+            item.keyEquivalentModifierMask = config.menuModifierMask
+        }
+    }
+
     // MARK: - Settings
 
     @objc private func openSettings() {
         SettingsWindowController.show(
-            currentConfig: hotkeyManager.config,
-            quickConfig:   hotkeyManager.quickConfig,
-            delegate:      self
+            currentConfig:  hotkeyManager.config,
+            quickConfig:    hotkeyManager.quickConfig,
+            toolShortcuts:  ToolShortcutsConfig.load(),
+            delegate:       self
         )
     }
 
@@ -301,6 +351,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
     func settingsDidUpdateQuickHotkey(_ config: HotkeyConfig) {
         hotkeyManager.updateQuick(config: config)
         updateCaptureMenuTitles()
+    }
+
+    func settingsDidUpdateToolShortcuts(_ shortcuts: ToolShortcutsConfig) {
+        shortcuts.save()
+        updateToolMenuKeyEquivalents(shortcuts)
+        NSApp.windows
+            .compactMap { $0.windowController as? EditorWindowController }
+            .forEach { $0.updateToolShortcuts(shortcuts) }
     }
 
     // MARK: - UNUserNotificationCenterDelegate
