@@ -342,24 +342,22 @@ class AnnotationOverlay: NSView {
             })
         }
 
-        for spotlight in spotlights {
-            let s = spotlight
-            let drawRect: CGRect
-            if dragState.isMovingOrResizingSpotlight(id: s.id), let lr = liveDragRect {
-                drawRect = lr
-            } else {
-                let viewOrigin = toView(s.rect.origin)
-                let viewSize = CGSize(width: s.rect.width * imageDisplayRect.width,
-                                     height: s.rect.height * imageDisplayRect.height)
-                drawRect = CGRect(origin: viewOrigin, size: viewSize)
-            }
-            items.append(DrawItem(zOrder: s.zOrder) {
-                self.drawSpotlightRect(drawRect.standardized, overlayColor: s.overlayColor,
-                                       opacity: s.overlayOpacity, shapeType: s.shapeType,
-                                       selected: self.selectedSpotlightID == s.id)
-                if self.selectedSpotlightID == s.id {
-                    self.drawCornerHandles(for: drawRect.standardized)
+        // Spotlights are drawn together in a single overlay pass (via drawAllSpotlights)
+        // so that multiple spotlights don't mask each other. We insert one DrawItem at
+        // the lowest zOrder among all spotlights so the combined overlay sorts correctly.
+        if !spotlights.isEmpty {
+            let minZ = spotlights.map { $0.zOrder }.min() ?? 0
+            // Capture the live-drag state for the spotlight currently being moved/resized.
+            let liveDragSpotlightID: UUID? = {
+                for s in spotlights {
+                    if dragState.isMovingOrResizingSpotlight(id: s.id) { return s.id }
                 }
+                return nil
+            }()
+            let capturedLiveDragRect = liveDragRect
+            items.append(DrawItem(zOrder: minZ) {
+                self.drawAllSpotlights(liveDragRect: capturedLiveDragRect,
+                                       liveDragID: liveDragSpotlightID)
             })
         }
 
@@ -568,7 +566,10 @@ class AnnotationOverlay: NSView {
 
     private func drawSpotlightRect(_ rect: CGRect, overlayColor: NSColor,
                                     opacity: CGFloat, shapeType: ShapeType, selected: Bool) {
-        // Fill the entire image area with the dim overlay, with an even-odd hole for the spotlight.
+        // Single-spotlight variant — delegates to the multi-spotlight path so that
+        // the overlay is always drawn as one combined pass (see drawAllSpotlights).
+        // This path is only reached for the live in-progress drag preview, where
+        // there is no existing spotlight to combine with.
         let outer = NSBezierPath(rect: imageDisplayRect)
         switch shapeType {
         case .rectangle:        outer.appendRect(rect)
@@ -594,6 +595,63 @@ class AnnotationOverlay: NSView {
             border.lineWidth = 1
             NSColor.white.withAlphaComponent(0.5).setStroke()
             border.stroke()
+        }
+    }
+
+    /// Draws all placed spotlights in a single overlay pass so they don't mask each other.
+    /// The overlay color/opacity of the first spotlight (by zOrder) is used for the combined layer.
+    private func drawAllSpotlights(liveDragRect: CGRect?, liveDragID: UUID?) {
+        guard !spotlights.isEmpty else { return }
+
+        // Build the list of (viewRect, spotlight) pairs in zOrder.
+        var entries: [(CGRect, Spotlight)] = []
+        for s in spotlights.sorted(by: { $0.zOrder < $1.zOrder }) {
+            let drawRect: CGRect
+            if s.id == liveDragID, let lr = liveDragRect {
+                drawRect = lr
+            } else {
+                let viewOrigin = toView(s.rect.origin)
+                let viewSize = CGSize(width: s.rect.width * imageDisplayRect.width,
+                                     height: s.rect.height * imageDisplayRect.height)
+                drawRect = CGRect(origin: viewOrigin, size: viewSize)
+            }
+            entries.append((drawRect.standardized, s))
+        }
+
+        // One overlay path covering the whole image, with all spotlight holes punched out.
+        let overlay = NSBezierPath(rect: imageDisplayRect)
+        for (rect, s) in entries {
+            switch s.shapeType {
+            case .rectangle:        overlay.appendRect(rect)
+            case .circle:           overlay.appendOval(in: rect)
+            case .roundedRectangle: overlay.appendRoundedRect(rect, xRadius: 10, yRadius: 10)
+            }
+        }
+        overlay.windingRule = .evenOdd
+        // Use the first spotlight's color/opacity for the combined overlay.
+        let first = entries[0].1
+        first.overlayColor.withAlphaComponent(min(max(first.overlayOpacity, 0.05), 0.95)).setFill()
+        overlay.fill()
+
+        // Draw borders and selection handles for each spotlight individually.
+        for (rect, s) in entries {
+            let border: NSBezierPath
+            switch s.shapeType {
+            case .rectangle:        border = NSBezierPath(rect: rect)
+            case .circle:           border = NSBezierPath(ovalIn: rect)
+            case .roundedRectangle: border = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
+            }
+            if selectedSpotlightID == s.id {
+                border.lineWidth = 1.5
+                NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
+                border.setLineDash([5, 3], count: 2, phase: 0)
+                border.stroke()
+                drawCornerHandles(for: rect)
+            } else {
+                border.lineWidth = 1
+                NSColor.white.withAlphaComponent(0.5).setStroke()
+                border.stroke()
+            }
         }
     }
 

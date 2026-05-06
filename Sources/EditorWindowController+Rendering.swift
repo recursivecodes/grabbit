@@ -262,22 +262,27 @@ extension GrabbitDocument {
     func withSpotlights(_ base: NSImage) -> NSImage {
         guard !spotlights.isEmpty else { return base }
         return drawOverBase(base) { size in
-            for s in self.spotlights.sorted(by: { $0.zOrder < $1.zOrder }) {
+            let sorted = self.spotlights.sorted(by: { $0.zOrder < $1.zOrder })
+
+            // One overlay path covering the whole image, with all spotlight holes punched out.
+            let overlay = NSBezierPath(rect: CGRect(origin: .zero, size: size))
+            for s in sorted {
                 let origin = CGPoint(x: s.rect.origin.x * size.width,
                                      y: s.rect.origin.y * size.height)
                 let sz = CGSize(width: s.rect.width * size.width,
                                 height: s.rect.height * size.height)
                 let spotRect = CGRect(origin: origin, size: sz).standardized
-                let outer = NSBezierPath(rect: CGRect(origin: .zero, size: size))
                 switch s.shapeType {
-                case .rectangle:        outer.appendRect(spotRect)
-                case .circle:           outer.appendOval(in: spotRect)
-                case .roundedRectangle: outer.appendRoundedRect(spotRect, xRadius: 10, yRadius: 10)
+                case .rectangle:        overlay.appendRect(spotRect)
+                case .circle:           overlay.appendOval(in: spotRect)
+                case .roundedRectangle: overlay.appendRoundedRect(spotRect, xRadius: 10, yRadius: 10)
                 }
-                outer.windingRule = .evenOdd
-                s.overlayColor.withAlphaComponent(min(max(s.overlayOpacity, 0.05), 0.95)).setFill()
-                outer.fill()
             }
+            overlay.windingRule = .evenOdd
+            // Use the first spotlight's color/opacity for the combined overlay.
+            let first = sorted[0]
+            first.overlayColor.withAlphaComponent(min(max(first.overlayOpacity, 0.05), 0.95)).setFill()
+            overlay.fill()
         }
     }
 
