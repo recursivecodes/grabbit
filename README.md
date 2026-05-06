@@ -24,6 +24,12 @@ If you find this app helpful, please consider buying me a coffee ☕️❤️!
   - Shapes — rectangle, circle, rounded rectangle with configurable border and fill
   - Blur / Pixelate — draw a rectangle to obscure any region; choose Gaussian Blur or Pixelate style; intensity slider 1–100
   - Highlight — draw a semi-transparent color band over any region; configurable color and opacity
+  - Spotlight — draw a window that stays bright while the surrounding image is dimmed; supports rectangle, circle, and rounded rectangle shapes; configurable overlay color and opacity; multiple spotlights can be placed without masking each other
+  - Step — click to place auto-numbered circular badges for step-by-step instructions; configurable diameter, fill color, and text color; select a badge to edit its number
+  - Extract Text (OCR) — drag a region to extract text using Vision; results appear in a sheet that lets you copy the recognized text to the clipboard
+- **Image editing**
+  - Crop — drag handles to define a crop region, then press Return to apply
+  - Resize — enter target dimensions in a dialog to resize the image
 - **Layer arrangement** — right-click any annotation to Bring to Front, Bring Forward, Send Backward, or Send to Back; z-order is respected in both the preview and the exported image
 - **Clicking to select** — click any annotation in no-tool mode to automatically activate the correct tool and select that annotation
 - **Image effects** — optional border and drop shadow (offset, blur, opacity)
@@ -126,9 +132,14 @@ Select a tool from the toolbar at the top of the editor:
 |------|-----------|
 | **Arrow** | Click-drag to draw. Drag the tail handle to reposition the start point. Drag the body to move the whole arrow. |
 | **Text** | Click to place a text box. Double-click an existing label to edit it inline. Drag to reposition. |
-| **Shape** | Click-drag to draw. Drag the bottom-right handle to resize. Drag the body to move. |
+| **Shape** | Click-drag to draw. Drag the corner handles to resize. Drag the body to move. |
 | **Blur / Pixelate** | Click-drag to draw a blur region. Choose Gaussian Blur or Pixelate in the sidebar. Use the Intensity slider to control how strongly the content is obscured. |
 | **Highlight** | Click-drag to draw a highlight band. Choose the color and opacity in the sidebar. |
+| **Spotlight** | Click-drag to draw a spotlight window. The area outside the window is dimmed by an overlay. Choose the shape (rectangle, circle, rounded rectangle), overlay color, and opacity in the sidebar. Multiple spotlights can be placed and they all share a single overlay layer. |
+| **Step** | Click to place a numbered badge. Badges are auto-numbered sequentially. Select a badge to edit its number, diameter, fill color, and text color in the sidebar. Drag to reposition. |
+| **Extract Text** | Click-drag to select a region. Grabbit runs OCR on that area and shows the recognized text in a sheet — click Copy to send it to the clipboard. |
+| **Crop** | Drag the handles to define the crop region, then press **Return** to apply. Press **Escape** to cancel. |
+| **Resize** | Opens a dialog to enter target dimensions. |
 
 Click any annotation while no tool is active to select it — the correct tool activates automatically. Select any annotation and press **Delete** or **Backspace** to remove it. Right-click for a context menu including layer arrangement (Bring to Front, Bring Forward, Send Backward, Send to Back).
 
@@ -174,7 +185,7 @@ Sources/
   SettingsWindowController.swift — settings dialog with hotkey recorder
   CaptureSession.swift          — screen capture via CGDisplayCreateImage
   OverlayWindowController.swift — full-screen selection overlay
-  AnnotationOverlay.swift       — annotation rendering and interaction (arrows, text, shapes)
+  AnnotationOverlay.swift       — annotation rendering and interaction (arrows, text, shapes, blur, highlight, spotlight, step, OCR)
   EditorWindowController.swift  — editor window, sidebar, zoom, export
 
 Resources/
