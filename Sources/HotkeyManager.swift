@@ -227,6 +227,7 @@ struct ToolShortcutsConfig {
     var blur:      HotkeyConfig
     var highlight: HotkeyConfig
     var spotlight: HotkeyConfig
+    var step:      HotkeyConfig
 
     static let `default` = ToolShortcutsConfig(
         crop:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey | shiftKey)),
@@ -237,7 +238,8 @@ struct ToolShortcutsConfig {
         shape:     HotkeyConfig(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(optionKey | shiftKey)),
         blur:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(optionKey | shiftKey)),
         highlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_H), modifiers: UInt32(optionKey | shiftKey)),
-        spotlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(optionKey | shiftKey))
+        spotlight: HotkeyConfig(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(optionKey | shiftKey)),
+        step:      HotkeyConfig(keyCode: UInt32(kVK_ANSI_1), modifiers: UInt32(optionKey))
     )
 
     private static let prefix = "grabbit.toolShortcut."
@@ -261,7 +263,8 @@ struct ToolShortcutsConfig {
             shape:     loadTool("shape",     fallback: d.shape),
             blur:      loadTool("blur",      fallback: d.blur),
             highlight: loadTool("highlight", fallback: d.highlight),
-            spotlight: loadTool("spotlight", fallback: d.spotlight)
+            spotlight: loadTool("spotlight", fallback: d.spotlight),
+            step:      loadTool("step",      fallback: d.step)
         )
     }
 
@@ -280,5 +283,6 @@ struct ToolShortcutsConfig {
         saveTool("blur",      blur)
         saveTool("highlight", highlight)
         saveTool("spotlight", spotlight)
+        saveTool("step",      step)
     }
 }

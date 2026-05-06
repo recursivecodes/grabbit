@@ -53,6 +53,9 @@ class GrabbitDocument: NSDocument {
     var spotlightOverlayColor:   NSColor
     var spotlightOverlayOpacity: CGFloat
     var spotlightShapeType:      ShapeType
+    var stepDiameter:  CGFloat
+    var stepFillColor: NSColor
+    var stepTextColor: NSColor
 
     // Annotation arrays.
     private(set) var arrows:          [Arrow]          = []
@@ -61,6 +64,7 @@ class GrabbitDocument: NSDocument {
     private(set) var blurRegions:     [BlurRegion]     = []
     private(set) var highlights:      [Highlight]      = []
     private(set) var spotlights:      [Spotlight]      = []
+    private(set) var stepBadges:      [StepBadge]      = []
 
     // Z-order counter — only ever incremented, never decremented.
     private var zOrderCounter: Int = 0
@@ -119,6 +123,9 @@ class GrabbitDocument: NSDocument {
         spotlightOverlayColor   = .black
         spotlightOverlayOpacity = 0.5
         spotlightShapeType      = .rectangle
+        stepDiameter  = CGFloat(loadDouble(Prefs.stepDiameter,  default: 80))
+        stepFillColor = loadColor(Prefs.stepFillColor,           default: .systemBlue)
+        stepTextColor = loadColor(Prefs.stepTextColor,           default: .white)
 
         super.init()
         // A freshly captured/opened image is immediately dirty — it hasn't been saved yet.
@@ -156,6 +163,9 @@ class GrabbitDocument: NSDocument {
         spotlightOverlayColor   = .black
         spotlightOverlayOpacity = 0.5
         spotlightShapeType      = .rectangle
+        stepDiameter  = CGFloat(loadDouble(Prefs.stepDiameter,  default: 32))
+        stepFillColor = loadColor(Prefs.stepFillColor,           default: .systemBlue)
+        stepTextColor = loadColor(Prefs.stepTextColor,           default: .white)
 
         super.init()
     }
@@ -197,7 +207,7 @@ class GrabbitDocument: NSDocument {
         // Clear any stale annotations from a previous load.
         arrows.removeAll(); textAnnotations.removeAll()
         shapes.removeAll(); blurRegions.removeAll(); highlights.removeAll()
-        spotlights.removeAll()
+        spotlights.removeAll(); stepBadges.removeAll()
     }
 
     // MARK: Write — saving the rendered flat image
@@ -307,6 +317,7 @@ class GrabbitDocument: NSDocument {
         let prevBlurs       = blurRegions
         let prevHighlights  = highlights
         let prevSpotlights  = spotlights
+        let prevSteps       = stepBadges
         let prevZOrder      = zOrderCounter
 
         undoManager?.registerUndo(withTarget: self) { doc in
@@ -314,7 +325,8 @@ class GrabbitDocument: NSDocument {
                 image: prevImage, hasImage: prevHasImage,
                 arrows: prevArrows, texts: prevTexts,
                 shapes: prevShapes, blurs: prevBlurs,
-                highlights: prevHighlights, spotlights: prevSpotlights, zOrder: prevZOrder
+                highlights: prevHighlights, spotlights: prevSpotlights,
+                steps: prevSteps, zOrder: prevZOrder
             )
         }
         undoManager?.setActionName("Load Image")
@@ -323,7 +335,7 @@ class GrabbitDocument: NSDocument {
         hasImage     = true
         arrows.removeAll(); textAnnotations.removeAll()
         shapes.removeAll(); blurRegions.removeAll(); highlights.removeAll()
-        spotlights.removeAll()
+        spotlights.removeAll(); stepBadges.removeAll()
         zOrderCounter = 0
         updateChangeCount(.changeDone)
         onImageChanged?()
@@ -333,7 +345,8 @@ class GrabbitDocument: NSDocument {
     private func restoreFullState(image: NSImage, hasImage: Bool,
                                   arrows: [Arrow], texts: [TextAnnotation],
                                   shapes: [Shape], blurs: [BlurRegion],
-                                  highlights: [Highlight], spotlights: [Spotlight], zOrder: Int) {
+                                  highlights: [Highlight], spotlights: [Spotlight],
+                                  steps: [StepBadge], zOrder: Int) {
         let prevImage      = currentImage
         let prevHasImage   = self.hasImage
         let prevArrows     = self.arrows
@@ -342,6 +355,7 @@ class GrabbitDocument: NSDocument {
         let prevBlurs      = blurRegions
         let prevHighlights = self.highlights
         let prevSpotlights = self.spotlights
+        let prevSteps      = stepBadges
         let prevZOrder     = zOrderCounter
 
         undoManager?.registerUndo(withTarget: self) { doc in
@@ -349,7 +363,8 @@ class GrabbitDocument: NSDocument {
                 image: prevImage, hasImage: prevHasImage,
                 arrows: prevArrows, texts: prevTexts,
                 shapes: prevShapes, blurs: prevBlurs,
-                highlights: prevHighlights, spotlights: prevSpotlights, zOrder: prevZOrder
+                highlights: prevHighlights, spotlights: prevSpotlights,
+                steps: prevSteps, zOrder: prevZOrder
             )
         }
 
@@ -361,6 +376,7 @@ class GrabbitDocument: NSDocument {
         blurRegions       = blurs
         self.highlights   = highlights
         self.spotlights   = spotlights
+        self.stepBadges   = steps
         zOrderCounter     = zOrder
         updateChangeCount(.changeDone)
         onImageChanged?()
@@ -384,9 +400,10 @@ class GrabbitDocument: NSDocument {
         let prev       = currentImage
         let prevArrows = arrows
         let prevTexts  = textAnnotations
+        let prevSteps  = stepBadges
 
         undoManager?.registerUndo(withTarget: self) { doc in
-            doc.restoreAfterResize(image: prev, arrows: prevArrows, texts: prevTexts)
+            doc.restoreAfterResize(image: prev, arrows: prevArrows, texts: prevTexts, steps: prevSteps)
         }
         undoManager?.setActionName("Resize")
 
@@ -400,6 +417,7 @@ class GrabbitDocument: NSDocument {
                 t.outlineWeight = max(0, t.outlineWeight * scale)
                 return t
             }
+            stepBadges = stepBadges.map { var s = $0; s.diameter = max(8, s.diameter * scale); return s }
         }
 
         currentImage = image
@@ -410,17 +428,20 @@ class GrabbitDocument: NSDocument {
 
     /// Restores image + scaled annotations directly, without re-applying scale logic.
     /// Used exclusively as the undo target for applyResize.
-    private func restoreAfterResize(image: NSImage, arrows: [Arrow], texts: [TextAnnotation]) {
+    private func restoreAfterResize(image: NSImage, arrows: [Arrow], texts: [TextAnnotation],
+                                    steps: [StepBadge]) {
         let prev       = currentImage
         let prevArrows = self.arrows
         let prevTexts  = textAnnotations
+        let prevSteps  = stepBadges
 
         undoManager?.registerUndo(withTarget: self) { doc in
-            doc.restoreAfterResize(image: prev, arrows: prevArrows, texts: prevTexts)
+            doc.restoreAfterResize(image: prev, arrows: prevArrows, texts: prevTexts, steps: prevSteps)
         }
 
         self.arrows          = arrows
         self.textAnnotations = texts
+        self.stepBadges      = steps
         currentImage         = image
         updateChangeCount(.changeDone)
         onImageChanged?()
@@ -675,6 +696,48 @@ class GrabbitDocument: NSDocument {
         onAnnotationsChanged?()
     }
 
+    func addStepBadge(_ badge: StepBadge) {
+        undoManager?.registerUndo(withTarget: self) { [id = badge.id] doc in
+            doc.removeStepBadge(id: id)
+        }
+        undoManager?.setActionName("Add Step")
+        stepBadges.append(badge)
+        updateChangeCount(.changeDone)
+        onAnnotationsChanged?()
+    }
+
+    func removeStepBadge(id: UUID) {
+        guard let idx = stepBadges.firstIndex(where: { $0.id == id }) else { return }
+        let badge = stepBadges[idx]
+        undoManager?.registerUndo(withTarget: self) { doc in
+            doc.addStepBadge(badge)
+        }
+        undoManager?.setActionName("Delete Step")
+        stepBadges.remove(at: idx)
+        updateChangeCount(.changeDone)
+        onAnnotationsChanged?()
+    }
+
+    func updateStepBadge(id: UUID, center: CGPoint? = nil, number: Int? = nil,
+                          diameter: CGFloat? = nil, fillColor: NSColor? = nil,
+                          textColor: NSColor? = nil) {
+        guard let idx = stepBadges.firstIndex(where: { $0.id == id }) else { return }
+        let prev = stepBadges[idx]
+        undoManager?.registerUndo(withTarget: self) { doc in
+            doc.updateStepBadge(id: id, center: prev.center, number: prev.number,
+                                 diameter: prev.diameter, fillColor: prev.fillColor,
+                                 textColor: prev.textColor)
+        }
+        undoManager?.setActionName("Edit Step")
+        if let v = center    { stepBadges[idx].center    = v }
+        if let v = number    { stepBadges[idx].number    = v }
+        if let v = diameter  { stepBadges[idx].diameter  = v }
+        if let v = fillColor { stepBadges[idx].fillColor = v }
+        if let v = textColor { stepBadges[idx].textColor = v }
+        updateChangeCount(.changeDone)
+        onAnnotationsChanged?()
+    }
+
     // MARK: - Z-order mutations (undoable)
 
     func setZOrders(_ pairs: [(id: UUID, z: Int)]) {
@@ -699,6 +762,7 @@ class GrabbitDocument: NSDocument {
         blurRegions.forEach     { all.append(($0.id, $0.zOrder)) }
         highlights.forEach      { all.append(($0.id, $0.zOrder)) }
         spotlights.forEach      { all.append(($0.id, $0.zOrder)) }
+        stepBadges.forEach      { all.append(($0.id, $0.zOrder)) }
         return all.sorted { $0.1 < $1.1 }
     }
 
@@ -709,6 +773,7 @@ class GrabbitDocument: NSDocument {
         if let i = blurRegions.firstIndex(where: { $0.id == id })     { blurRegions[i].zOrder = z }
         if let i = highlights.firstIndex(where: { $0.id == id })      { highlights[i].zOrder = z }
         if let i = spotlights.firstIndex(where: { $0.id == id })      { spotlights[i].zOrder = z }
+        if let i = stepBadges.firstIndex(where: { $0.id == id })      { stepBadges[i].zOrder = z }
     }
 
     // MARK: - Preferences persistence
@@ -733,5 +798,8 @@ class GrabbitDocument: NSDocument {
         saveDouble(Double(shapeBorderWeight), key: Prefs.shapeBorderWeight)
         saveColor(shapeBorderColor,           key: Prefs.shapeBorderColor)
         saveColor(shapeFillColor,             key: Prefs.shapeFillColor)
+        saveDouble(Double(stepDiameter),      key: Prefs.stepDiameter)
+        saveColor(stepFillColor,              key: Prefs.stepFillColor)
+        saveColor(stepTextColor,              key: Prefs.stepTextColor)
     }
 }

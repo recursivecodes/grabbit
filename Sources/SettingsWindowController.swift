@@ -32,6 +32,7 @@ class SettingsWindowController: NSWindowController {
     private var blurRecorder:       HotkeyRecorderView!
     private var highlightRecorder:  HotkeyRecorderView!
     private var spotlightRecorder:  HotkeyRecorderView!
+    private var stepRecorder:       HotkeyRecorderView!
 
     private static var shared: SettingsWindowController?
 
@@ -208,6 +209,10 @@ class SettingsWindowController: NSWindowController {
         spotlightRecorder  = makeRecorder(currentToolShortcuts.spotlight)
         spotlightRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.spotlight = cfg }
 
+        let stepLabel = makeRowLabel("Step")
+        stepRecorder  = makeRecorder(currentToolShortcuts.step)
+        stepRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.step = cfg }
+
         // ── Buttons ──────────────────────────────────────────────────────────────
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancelButton.keyEquivalent = "\u{1b}"
@@ -355,6 +360,15 @@ class SettingsWindowController: NSWindowController {
             spotlightRecorder.widthAnchor.constraint(equalToConstant: 120),
             spotlightRecorder.heightAnchor.constraint(equalToConstant: 26),
 
+            // Step row
+            stepLabel.topAnchor.constraint(equalTo: spotlightRecorder.bottomAnchor, constant: 8),
+            stepLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            stepLabel.widthAnchor.constraint(equalToConstant: 100),
+            stepRecorder.centerYAnchor.constraint(equalTo: stepLabel.centerYAnchor),
+            stepRecorder.leadingAnchor.constraint(equalTo: stepLabel.trailingAnchor, constant: 8),
+            stepRecorder.widthAnchor.constraint(equalToConstant: 120),
+            stepRecorder.heightAnchor.constraint(equalToConstant: 26),
+
             // Buttons
             cancelButton.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
             cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
@@ -378,6 +392,7 @@ class SettingsWindowController: NSWindowController {
         blurRecorder?.setConfig(currentToolShortcuts.blur)
         highlightRecorder?.setConfig(currentToolShortcuts.highlight)
         spotlightRecorder?.setConfig(currentToolShortcuts.spotlight)
+        stepRecorder?.setConfig(currentToolShortcuts.step)
         refreshPreview()
     }
 

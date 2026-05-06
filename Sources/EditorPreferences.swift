@@ -22,6 +22,9 @@ enum Prefs {
     static let shapeBorderWeight = "grabbit.shapeBorderWeight"
     static let shapeBorderColor  = "grabbit.shapeBorderColor"
     static let shapeFillColor    = "grabbit.shapeFillColor"
+    static let stepDiameter      = "grabbit.stepDiameter"
+    static let stepFillColor     = "grabbit.stepFillColor"
+    static let stepTextColor     = "grabbit.stepTextColor"
 }
 
 // MARK: - UserDefaults helpers
@@ -58,4 +61,4 @@ func saveString(_ value: String, key: String) {
 
 // MARK: - Tool mode
 
-enum ToolMode { case none, arrow, text, shape, crop, blur, highlight, ocr, spotlight }
+enum ToolMode { case none, arrow, text, shape, crop, blur, highlight, ocr, spotlight, step }

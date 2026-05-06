@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Tool
 
-enum AnnotationTool { case none, arrow, text, shape, blur, highlight, ocr, spotlight }
+enum AnnotationTool { case none, arrow, text, shape, blur, highlight, ocr, spotlight, step }
 
 // MARK: - ShapeType
 
@@ -55,6 +55,18 @@ struct Spotlight {
     var overlayColor: NSColor
     var overlayOpacity: CGFloat  // 0-1
     var shapeType: ShapeType
+}
+
+// MARK: - StepBadge
+
+struct StepBadge {
+    var id = UUID()
+    var zOrder: Int = 0
+    var center: CGPoint   // normalized 0-1, y=0 at bottom
+    var number: Int
+    var diameter: CGFloat // display points, scaled for export like fontSize
+    var fillColor: NSColor
+    var textColor: NSColor
 }
 
 // MARK: - Arrow
@@ -115,6 +127,7 @@ class AnnotationOverlay: NSView {
     var blurRegions:     [BlurRegion]     { document?.blurRegions     ?? [] }
     var highlights:      [Highlight]      { document?.highlights      ?? [] }
     var spotlights:      [Spotlight]      { document?.spotlights      ?? [] }
+    var stepBadges:      [StepBadge]      { document?.stepBadges      ?? [] }
 
     // MARK: Current tool defaults (set by EditorWindowController from sidebar)
     var currentWeight:        CGFloat   = 2
@@ -135,6 +148,9 @@ class AnnotationOverlay: NSView {
     var currentSpotlightOverlayColor:   NSColor = .black
     var currentSpotlightOverlayOpacity: CGFloat = 0.5
     var currentSpotlightShapeType:      ShapeType = .rectangle
+    var currentStepDiameter:  CGFloat = 32
+    var currentStepFillColor: NSColor = .systemBlue
+    var currentStepTextColor: NSColor = .white
 
     // MARK: Active tool
     var activeTool: AnnotationTool = .none {
@@ -146,6 +162,7 @@ class AnnotationOverlay: NSView {
             if activeTool != .blur      { selectedBlurID = nil }
             if activeTool != .highlight { selectedHighlightID = nil }
             if activeTool != .spotlight { selectedSpotlightID = nil }
+            if activeTool != .step      { selectedStepID = nil }
             needsDisplay = true
         }
     }
@@ -154,6 +171,7 @@ class AnnotationOverlay: NSView {
     var imageDisplayRectProvider: (() -> CGRect)?
     var onCopy:                   (() -> Void)?
     var onTextSelectionChanged:   ((TextAnnotation?) -> Void)?
+    var onStepSelectionChanged:   ((StepBadge?) -> Void)?
     var onActivateTool:           ((AnnotationTool) -> Void)?
     var onSelectionChanged:       ((AnnotationTool) -> Void)?  // fires when a hit-test selects an annotation
     var imageProvider:            (() -> NSImage?)?
@@ -172,6 +190,12 @@ class AnnotationOverlay: NSView {
     private var selectedBlurID:       UUID?
     private var selectedHighlightID:  UUID?
     private var selectedSpotlightID:  UUID?
+    private var selectedStepID:       UUID? {
+        didSet {
+            let badge = selectedStepID.flatMap { id in stepBadges.first { $0.id == id } }
+            onStepSelectionChanged?(badge)
+        }
+    }
 
     enum ResizeCorner { case topLeft, topRight, bottomLeft, bottomRight }
 
@@ -194,6 +218,8 @@ class AnnotationOverlay: NSView {
         case newSpotlight(start: CGPoint, current: CGPoint)
         case movingSpotlightWhole(id: UUID, origRect: CGRect, lastLoc: CGPoint)
         case resizingSpotlight(id: UUID, corner: ResizeCorner, originalRect: CGRect)
+        case newStep(position: CGPoint)
+        case movingStep(id: UUID, origCenter: CGPoint, currentCenter: CGPoint)
     }
     private var dragState: DragState = .none
 
@@ -337,6 +363,17 @@ class AnnotationOverlay: NSView {
             })
         }
 
+        for badge in stepBadges {
+            let b = badge
+            var drawBadge = b
+            if case .movingStep(let id, _, let current) = dragState, id == b.id {
+                drawBadge.center = current
+            }
+            items.append(DrawItem(zOrder: b.zOrder) {
+                self.drawStepBadge(drawBadge, selected: self.selectedStepID == b.id)
+            })
+        }
+
         items.sorted { $0.zOrder < $1.zOrder }.forEach { $0.draw() }
 
         // In-progress new annotations drawn on top.
@@ -367,6 +404,15 @@ class AnnotationOverlay: NSView {
             drawSpotlightRect(rect, overlayColor: currentSpotlightOverlayColor,
                               opacity: currentSpotlightOverlayOpacity,
                               shapeType: currentSpotlightShapeType, selected: false)
+        }
+        if case .newStep(let position) = dragState {
+            let norm = toNorm(position)
+            let nextNum = min(99, (document?.stepBadges.map { $0.number }.max() ?? 0) + 1)
+            let preview = StepBadge(center: norm, number: nextNum,
+                                    diameter: currentStepDiameter,
+                                    fillColor: currentStepFillColor,
+                                    textColor: currentStepTextColor)
+            drawStepBadge(preview, selected: false)
         }
     }
 
@@ -563,13 +609,39 @@ class AnnotationOverlay: NSView {
         border.stroke()
     }
 
+    private func drawStepBadge(_ badge: StepBadge, selected: Bool) {
+        let center = toView(badge.center)
+        let r = badge.diameter / 2
+        let rect = CGRect(x: center.x - r, y: center.y - r,
+                          width: badge.diameter, height: badge.diameter)
+        let circle = NSBezierPath(ovalIn: rect)
+        badge.fillColor.setFill(); circle.fill()
+
+        if selected {
+            let selRect = CGRect(x: center.x - r - 4, y: center.y - r - 4,
+                                 width: badge.diameter + 8, height: badge.diameter + 8)
+            let selCircle = NSBezierPath(ovalIn: selRect)
+            selCircle.lineWidth = 1.5
+            NSColor.selectedControlColor.withAlphaComponent(0.9).setStroke()
+            selCircle.setLineDash([5, 3], count: 2, phase: 0); selCircle.stroke()
+        }
+
+        let numStr = "\(badge.number)"
+        let fontSize = badge.diameter * 0.45
+        let font = NSFont.boldSystemFont(ofSize: fontSize)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: badge.textColor]
+        let attrStr = NSAttributedString(string: numStr, attributes: attrs)
+        let sz = attrStr.size()
+        attrStr.draw(at: CGPoint(x: center.x - sz.width / 2, y: center.y - sz.height / 2))
+    }
+
     // MARK: - Cursor
 
     override func resetCursorRects() {
         // Base cursor for the active tool — overridden dynamically in mouseMoved.
         let cursor: NSCursor
         switch activeTool {
-        case .arrow, .shape, .blur, .highlight, .ocr, .spotlight: cursor = .crosshair
+        case .arrow, .shape, .blur, .highlight, .ocr, .spotlight, .step: cursor = .crosshair
         case .text:  cursor = .iBeam
         case .none:  cursor = .arrow
         }
@@ -592,7 +664,7 @@ class AnnotationOverlay: NSView {
         } else {
             // Restore the tool's default cursor.
             switch activeTool {
-            case .arrow, .shape, .blur, .highlight, .ocr, .spotlight: NSCursor.crosshair.set()
+            case .arrow, .shape, .blur, .highlight, .ocr, .spotlight, .step: NSCursor.crosshair.set()
             case .text:  NSCursor.iBeam.set()
             case .none:  NSCursor.arrow.set()
             }
@@ -785,7 +857,7 @@ class AnnotationOverlay: NSView {
         // so the topmost-drawn annotation wins the hit-test.
         enum AnyAnnotation {
             case arrow(Arrow), text(TextAnnotation), shape(Shape)
-            case blur(BlurRegion), highlight(Highlight), spotlight(Spotlight)
+            case blur(BlurRegion), highlight(Highlight), spotlight(Spotlight), step(StepBadge)
             var zOrder: Int {
                 switch self {
                 case .arrow(let a):     return a.zOrder
@@ -794,6 +866,7 @@ class AnnotationOverlay: NSView {
                 case .blur(let b):      return b.zOrder
                 case .highlight(let h): return h.zOrder
                 case .spotlight(let s): return s.zOrder
+                case .step(let s):      return s.zOrder
                 }
             }
         }
@@ -804,6 +877,7 @@ class AnnotationOverlay: NSView {
         blurRegions.forEach     { all.append(.blur($0)) }
         highlights.forEach      { all.append(.highlight($0)) }
         spotlights.forEach      { all.append(.spotlight($0)) }
+        stepBadges.forEach      { all.append(.step($0)) }
         all.sort { $0.zOrder > $1.zOrder }
 
         for item in all {
@@ -931,6 +1005,18 @@ class AnnotationOverlay: NSView {
                     notifySelection(.spotlight)
                     return true
                 }
+
+            case .step(let badge):
+                let center = toView(badge.center)
+                if hypot(loc.x - center.x, loc.y - center.y) <= badge.diameter / 2 + 4 {
+                    clearAllSelections()
+                    selectedStepID = badge.id
+                    dragState = .movingStep(id: badge.id, origCenter: badge.center,
+                                            currentCenter: badge.center)
+                    dragAnchor = loc; needsDisplay = true
+                    notifySelection(.step)
+                    return true
+                }
             }
         }
         return false
@@ -944,6 +1030,7 @@ class AnnotationOverlay: NSView {
         selectedBlurID      = nil
         selectedHighlightID = nil
         selectedSpotlightID = nil
+        selectedStepID      = nil
     }
 
     /// Call after setting a new selection to notify the window controller.
@@ -1041,6 +1128,14 @@ class AnnotationOverlay: NSView {
             if imgRect.contains(loc) {
                 selectedSpotlightID = nil
                 dragState = .newSpotlight(start: loc, current: loc)
+                needsDisplay = true
+            }
+
+        // ── Step ──────────────────────────────────────────────────────────────────
+        case .step:
+            if imgRect.contains(loc) {
+                selectedStepID = nil
+                dragState = .newStep(position: loc)
                 needsDisplay = true
             }
 
@@ -1200,6 +1295,17 @@ class AnnotationOverlay: NSView {
         case .resizingSpotlight(let id, let corner, let originalRect):
             liveDragRect = resizedViewRect(originalRect: originalRect, corner: corner,
                                            currentLoc: clamped, shift: shiftDown)
+
+        case .newStep(_):
+            dragState = .newStep(position: clamped)
+
+        case .movingStep(let id, let origCenter, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (loc.x - dragAnchor.x) / r.width
+            let totalDY = (loc.y - dragAnchor.y) / r.height
+            let newCenter = CGPoint(x: origCenter.x + totalDX, y: origCenter.y + totalDY)
+            dragState = .movingStep(id: id, origCenter: origCenter, currentCenter: newCenter)
 
         case .none:
             break
@@ -1392,6 +1498,25 @@ class AnnotationOverlay: NSView {
                 document?.updateSpotlight(id: id, rect: viewRectToNorm(lr.standardized))
             }
 
+        case .newStep(let position):
+            let norm = toNorm(position)
+            let nextNum = min(99, (document?.stepBadges.map { $0.number }.max() ?? 0) + 1)
+            let badge = StepBadge(id: UUID(), zOrder: document?.nextZOrder() ?? 0,
+                                   center: norm, number: nextNum,
+                                   diameter: currentStepDiameter,
+                                   fillColor: currentStepFillColor,
+                                   textColor: currentStepTextColor)
+            document?.addStepBadge(badge)
+            selectedStepID = badge.id
+
+        case .movingStep(let id, let origCenter, _):
+            let r = imageDisplayRect
+            guard r.width > 0, r.height > 0 else { break }
+            let totalDX = (clamped.x - dragAnchor.x) / r.width
+            let totalDY = (clamped.y - dragAnchor.y) / r.height
+            let newCenter = CGPoint(x: origCenter.x + totalDX, y: origCenter.y + totalDY)
+            document?.updateStepBadge(id: id, center: newCenter)
+
         case .none:
             break
         }
@@ -1419,7 +1544,7 @@ class AnnotationOverlay: NSView {
             liveDragArrowStart = nil; liveDragArrowEnd = nil; liveDragRect = nil
             selectedArrowID = nil; selectedTextID = nil
             selectedShapeID = nil; selectedBlurID = nil; selectedHighlightID = nil
-            selectedSpotlightID = nil
+            selectedSpotlightID = nil; selectedStepID = nil
             needsDisplay = true; return
         }
         super.keyDown(with: event)
@@ -1432,6 +1557,7 @@ class AnnotationOverlay: NSView {
         if let id = selectedBlurID      { document?.removeBlurRegion(id: id);     selectedBlurID  = nil }
         if let id = selectedHighlightID { document?.removeHighlight(id: id);      selectedHighlightID = nil }
         if let id = selectedSpotlightID { document?.removeSpotlight(id: id);      selectedSpotlightID = nil }
+        if let id = selectedStepID      { document?.removeStepBadge(id: id);      selectedStepID  = nil }
         needsDisplay = true
     }
 
@@ -1515,6 +1641,17 @@ class AnnotationOverlay: NSView {
                 return menu
             }
         }
+        for badge in stepBadges.sorted(by: { $0.zOrder > $1.zOrder }) {
+            let center = toView(badge.center)
+            if hypot(loc.x - center.x, loc.y - center.y) <= badge.diameter / 2 + 4 {
+                selectedStepID = badge.id; needsDisplay = true
+                let del = NSMenuItem(title: "Delete Step", action: #selector(deleteSelectedItem(_:)),
+                                     keyEquivalent: "")
+                del.target = self; menu.addItem(del)
+                addArrangeItems(to: menu)
+                return menu
+            }
+        }
         // Generic copy option.
         let copy = NSMenuItem(title: "Copy Image", action: #selector(copyImageAction(_:)),
                               keyEquivalent: "")
@@ -1534,7 +1671,7 @@ class AnnotationOverlay: NSView {
 
     private func selectedAnnotationID() -> UUID? {
         selectedArrowID ?? selectedTextID ?? selectedShapeID
-            ?? selectedBlurID ?? selectedHighlightID ?? selectedSpotlightID
+            ?? selectedBlurID ?? selectedHighlightID ?? selectedSpotlightID ?? selectedStepID
     }
 
     private func addArrangeItems(to menu: NSMenu) {
@@ -1681,6 +1818,15 @@ class AnnotationOverlay: NSView {
         document?.updateSpotlight(id: id, overlayColor: overlayColor,
                                   overlayOpacity: overlayOpacity, shapeType: shapeType)
     }
+
+    /// Update the currently selected step badge's properties.
+    func updateSelectedStep(number: Int? = nil, diameter: CGFloat? = nil,
+                             fillColor: NSColor? = nil, textColor: NSColor? = nil) {
+        guard let id = selectedStepID else { return }
+        document?.updateStepBadge(id: id, number: number, diameter: diameter,
+                                   fillColor: fillColor, textColor: textColor)
+        needsDisplay = true
+    }
 }
 
 // MARK: - DragState helpers
@@ -1712,6 +1858,10 @@ fileprivate extension AnnotationOverlay.DragState {
     func isMovingOrResizingSpotlight(id: UUID) -> Bool {
         if case .movingSpotlightWhole(let sid, _, _) = self { return sid == id }
         if case .resizingSpotlight(let sid, _, _) = self { return sid == id }
+        return false
+    }
+    func isMovingStep(id: UUID) -> Bool {
+        if case .movingStep(let sid, _, _) = self { return sid == id }
         return false
     }
 }

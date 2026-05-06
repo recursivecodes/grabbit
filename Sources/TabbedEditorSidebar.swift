@@ -15,6 +15,7 @@ class TabbedEditorSidebar: NSView {
     private var blurPropViews:    [NSView] = []
     private var highlightPropViews:  [NSView] = []
     private var spotlightPropViews:  [NSView] = []
+    private var stepPropViews:       [NSView] = []
 
     init(
         arrowWeightSlider: NSSlider, arrowWeightLabel: NSTextField, arrowColorWell: NSColorWell,
@@ -33,7 +34,11 @@ class TabbedEditorSidebar: NSView {
         highlightOpacitySlider: NSSlider, highlightOpacityLabel: NSTextField,
         spotlightShapePopup: NSPopUpButton,
         spotlightOverlayColorWell: NSColorWell,
-        spotlightOpacitySlider: NSSlider, spotlightOpacityLabel: NSTextField
+        spotlightOpacitySlider: NSSlider, spotlightOpacityLabel: NSTextField,
+        stepDiameterSlider: NSSlider, stepDiameterLabel: NSTextField,
+        stepFillColorWell: NSColorWell,
+        stepTextColorWell: NSColorWell,
+        stepNumberField: NSTextField
     ) {
         tabControl = NSSegmentedControl(
             labels: ["Properties", "Effects"],
@@ -277,6 +282,32 @@ class TabbedEditorSidebar: NSView {
         propertiesStack.addArrangedSubview(spotlightOpacityRow)
         spotlightPropViews.append(spotlightOpacityRow)
 
+        // ── Properties: step tool section ────────────────────────────────────────
+        let stepHeader = makeSectionBox("STEP")
+        stepHeader.isHidden = true
+        propertiesStack.addArrangedSubview(stepHeader)
+        stepPropViews.append(stepHeader)
+
+        let stepNumberRow = makeSidebarRow("Number", stepNumberField)
+        stepNumberRow.isHidden = true
+        propertiesStack.addArrangedSubview(stepNumberRow)
+        stepPropViews.append(stepNumberRow)
+
+        let stepDiameterRow = makeSidebarRow("Size", stepDiameterSlider, stepDiameterLabel)
+        stepDiameterRow.isHidden = true
+        propertiesStack.addArrangedSubview(stepDiameterRow)
+        stepPropViews.append(stepDiameterRow)
+
+        let stepColorRow = makeSidebarRow("Color", stepFillColorWell)
+        stepColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(stepColorRow)
+        stepPropViews.append(stepColorRow)
+
+        let stepTextColorRow = makeSidebarRow("Number Color", stepTextColorWell)
+        stepTextColorRow.isHidden = true
+        propertiesStack.addArrangedSubview(stepTextColorRow)
+        stepPropViews.append(stepTextColorRow)
+
         // Start showing Properties tab
         effectsScroll.isHidden = true
 
@@ -316,12 +347,14 @@ class TabbedEditorSidebar: NSView {
         let isBlur       = mode == .blur
         let isHighlight  = mode == .highlight
         let isSpotlight  = mode == .spotlight
+        let isStep       = mode == .step
         arrowPropViews.forEach     { $0.isHidden = !isArrow }
         textPropViews.forEach      { $0.isHidden = !isText }
         shapePropViews.forEach     { $0.isHidden = !isShape }
         blurPropViews.forEach      { $0.isHidden = !isBlur }
         highlightPropViews.forEach { $0.isHidden = !isHighlight }
         spotlightPropViews.forEach { $0.isHidden = !isSpotlight }
+        stepPropViews.forEach      { $0.isHidden = !isStep }
         if mode != .none && tabControl.selectedSegment != 0 {
             tabControl.selectedSegment = 0
             propertiesScroll.isHidden = false
@@ -375,7 +408,8 @@ class TabbedEditorSidebar: NSView {
         let lbl = NSTextField(labelWithString: labelText)
         lbl.font = NSFont.systemFont(ofSize: 12)
         lbl.translatesAutoresizingMaskIntoConstraints = false
-        lbl.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        lbl.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        lbl.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         control.translatesAutoresizingMaskIntoConstraints = false
         control.setContentHuggingPriority(.defaultLow, for: .horizontal)

@@ -90,6 +90,7 @@ extension GrabbitDocument {
         img = withBlurRegions(img)
         img = withHighlights(img)
         img = withSpotlights(img)
+        img = withStepBadges(img, displayWidth: displayWidth)
         img = withArrows(img, displayWidth: displayWidth)
         img = withTexts(img, displayWidth: displayWidth)
         img = withShapes(img, displayWidth: displayWidth)
@@ -276,6 +277,31 @@ extension GrabbitDocument {
                 outer.windingRule = .evenOdd
                 s.overlayColor.withAlphaComponent(min(max(s.overlayOpacity, 0.05), 0.95)).setFill()
                 outer.fill()
+            }
+        }
+    }
+
+    // MARK: - Step badges
+
+    private func withStepBadges(_ base: NSImage, displayWidth: CGFloat) -> NSImage {
+        guard !stepBadges.isEmpty else { return base }
+        return drawOverBase(base) { size in
+            let scale = displayWidth > 0 ? size.width / displayWidth : 1
+            for badge in self.stepBadges {
+                let cx = badge.center.x * size.width
+                let cy = badge.center.y * size.height
+                let d  = badge.diameter * scale
+                let r  = d / 2
+                let rect = CGRect(x: cx - r, y: cy - r, width: d, height: d)
+                let circle = NSBezierPath(ovalIn: rect)
+                badge.fillColor.setFill(); circle.fill()
+                let numStr  = "\(badge.number)"
+                let fontSize = d * 0.45
+                let font    = NSFont.boldSystemFont(ofSize: fontSize)
+                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: badge.textColor]
+                let attrStr = NSAttributedString(string: numStr, attributes: attrs)
+                let sz = attrStr.size()
+                attrStr.draw(at: CGPoint(x: cx - sz.width / 2, y: cy - sz.height / 2))
             }
         }
     }

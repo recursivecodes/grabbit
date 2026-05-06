@@ -6,7 +6,7 @@ import Vision
 
 // MARK: - EditorWindowController
 
-class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
+class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSTextFieldDelegate {
 
     // MARK: Document
     private(set) var grabbitDocument: GrabbitDocument
@@ -22,6 +22,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     private var blurToolButton:      NSButton!
     private var highlightToolButton: NSButton!
     private var spotlightToolButton: NSButton!
+    private var stepToolButton:      NSButton!
     private var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
     private var cropToolButton:   NSButton!
@@ -57,10 +58,15 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     private var spotlightShapePopup:         NSPopUpButton!
     private var spotlightOverlayColorWell:   NSColorWell!
     private var spotlightOpacitySlider:      NSSlider!;  private var spotlightOpacityLabel:      NSTextField!
+    private var stepDiameterSlider:          NSSlider!;  private var stepDiameterLabel:          NSTextField!
+    private var stepFillColorWell:           NSColorWell!
+    private var stepTextColorWell:           NSColorWell!
+    private var stepNumberField:             NSTextField!
 
     private var toolMode: ToolMode = .none
     private var toolShortcuts = ToolShortcutsConfig.load()
     private var toolShortcutMonitor: Any?
+    private var hasAppliedInitialZoom = false
 
     // MARK: - Show helpers (used by CaptureSession / AppDelegate)
 
@@ -177,14 +183,16 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         let blurBtn       = makeToolButton("Blur")
         let highlightBtn  = makeToolButton("Highlight")
         let spotlightBtn  = makeToolButton("Spotlight")
+        let stepBtn       = makeToolButton("Step")
         cropBtn.toolTip       = "Crop image"
         resizeBtn.toolTip     = "Resize image"
         ocrBtn.toolTip        = "Drag a region to extract text (OCR)"
         blurBtn.toolTip       = "Blur / pixelate a region"
         highlightBtn.toolTip  = "Highlight a region"
         spotlightBtn.toolTip  = "Spotlight a region (dims surrounding area)"
+        stepBtn.toolTip       = "Place numbered step badges (click to place, auto-numbered)"
 
-        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, ocrBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn, spotlightBtn])
+        let toolsStack = NSStackView(views: [cropBtn, resizeBtn, ocrBtn, arrowBtn, textBtn, shapeBtn, blurBtn, highlightBtn, spotlightBtn, stepBtn])
         toolsStack.orientation = .horizontal
         toolsStack.spacing = 6
         toolsStack.translatesAutoresizingMaskIntoConstraints = false
@@ -322,6 +330,20 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         let spotlightOpacitySliderLocal      = sld(10, 90, Double(doc.spotlightOverlayOpacity * 100))
         let spotlightOpacityLabelLocal       = vlbl("\(Int(doc.spotlightOverlayOpacity * 100))%")
 
+        let stepDiameterSliderLocal = sld(50, 250, Double(doc.stepDiameter))
+        let stepDiameterLabelLocal  = vlbl(fmt(doc.stepDiameter))
+        let stepFillColorWellLocal  = well(doc.stepFillColor)
+        let stepTextColorWellLocal  = well(doc.stepTextColor)
+        let stepNumField = NSTextField()
+        stepNumField.controlSize = .small
+        stepNumField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize,
+                                                              weight: .regular)
+        stepNumField.alignment = .center
+        stepNumField.isEditable = false
+        stepNumField.isContinuous = false
+        stepNumField.integerValue = 1
+        stepNumField.widthAnchor.constraint(equalToConstant: 50).isActive = true
+
         let sb = TabbedEditorSidebar(
             arrowWeightSlider: awSlider, arrowWeightLabel: awLabel, arrowColorWell: acWell,
             textFontPopup: tfPopup,
@@ -341,7 +363,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             spotlightShapePopup: spotlightShapePopupLocal,
             spotlightOverlayColorWell: spotlightOverlayColorWellLocal,
             spotlightOpacitySlider: spotlightOpacitySliderLocal,
-            spotlightOpacityLabel: spotlightOpacityLabelLocal)
+            spotlightOpacityLabel: spotlightOpacityLabelLocal,
+            stepDiameterSlider: stepDiameterSliderLocal, stepDiameterLabel: stepDiameterLabelLocal,
+            stepFillColorWell: stepFillColorWellLocal,
+            stepTextColorWell: stepTextColorWellLocal,
+            stepNumberField: stepNumField)
         sb.translatesAutoresizingMaskIntoConstraints = false
         sb.addEffectSection("BORDER", toggle: bToggle)
         sb.addEffectRow("Weight", bwSlider, bwLabel)
@@ -372,7 +398,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
         arrowToolButton = arrowBtn;  textToolButton = textBtn;   shapeToolButton = shapeBtn
         blurToolButton = blurBtn;    highlightToolButton = highlightBtn
-        spotlightToolButton = spotlightBtn
+        spotlightToolButton = spotlightBtn; stepToolButton = stepBtn
         zoomScroll = zs;  zoomLabel = zl
         cropToolButton = cropBtn;  resizeToolButton = resizeBtn;  ocrToolButton = ocrBtn;  cropOverlay = co
         borderToggle = bToggle;              shadowToggle = sToggle
@@ -399,6 +425,10 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         spotlightOverlayColorWell   = spotlightOverlayColorWellLocal
         spotlightOpacitySlider      = spotlightOpacitySliderLocal
         spotlightOpacityLabel       = spotlightOpacityLabelLocal
+        stepDiameterSlider = stepDiameterSliderLocal; stepDiameterLabel = stepDiameterLabelLocal
+        stepFillColorWell  = stepFillColorWellLocal
+        stepTextColorWell  = stepTextColorWellLocal
+        stepNumberField    = stepNumField
 
         super.init(window: win)
         win.delegate = self
@@ -414,6 +444,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         blurBtn.target      = self; blurBtn.action      = #selector(toggleBlurTool(_:))
         highlightBtn.target  = self; highlightBtn.action  = #selector(toggleHighlightTool(_:))
         spotlightBtn.target  = self; spotlightBtn.action  = #selector(toggleSpotlightTool(_:))
+        stepBtn.target       = self; stepBtn.action       = #selector(toggleStepTool(_:))
         zoomInBtn.target    = self; zoomInBtn.action    = #selector(zoomIn)
         zoomOutBtn.target   = self; zoomOutBtn.action   = #selector(zoomOut)
         borderToggle.target = self; borderToggle.action = #selector(borderToggleChanged(_:))
@@ -439,6 +470,11 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         spotlightShapePopup.target     = self; spotlightShapePopup.action     = #selector(spotlightShapeChanged(_:))
         spotlightOverlayColorWell.target = self; spotlightOverlayColorWell.action = #selector(colorPanelChanged)
         spotlightOpacitySlider.target  = self; spotlightOpacitySlider.action  = #selector(spotlightOpacityChanged(_:))
+        stepDiameterSlider.target      = self; stepDiameterSlider.action      = #selector(stepDiameterChanged(_:))
+        stepFillColorWell.target       = self; stepFillColorWell.action       = #selector(colorPanelChanged)
+        stepTextColorWell.target       = self; stepTextColorWell.action       = #selector(colorPanelChanged)
+        stepNumberField.target         = self; stepNumberField.action         = #selector(stepNumberChanged(_:))
+        stepNumberField.delegate       = self
 
         (zoomScroll as? ZoomableScrollView)?.onMagnificationChanged = { [weak self] in
             self?.updateZoomLabel()
@@ -469,6 +505,9 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         annotationOverlay.currentSpotlightOverlayColor   = document.spotlightOverlayColor
         annotationOverlay.currentSpotlightOverlayOpacity = document.spotlightOverlayOpacity
         annotationOverlay.currentSpotlightShapeType      = document.spotlightShapeType
+        annotationOverlay.currentStepDiameter  = document.stepDiameter
+        annotationOverlay.currentStepFillColor = document.stepFillColor
+        annotationOverlay.currentStepTextColor = document.stepTextColor
 
         annotationOverlay.imageDisplayRectProvider = { [weak self] in
             guard let iv = self?.captureView, let img = iv.image else { return .zero }
@@ -489,9 +528,26 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             case .highlight: self.annotationOverlay.activeTool = .highlight
             case .ocr:       self.annotationOverlay.activeTool = .ocr
             case .spotlight: self.annotationOverlay.activeTool = .spotlight
+            case .step:      self.annotationOverlay.activeTool = .step
             case .none:      self.annotationOverlay.activeTool = .none
             }
             self.window?.makeFirstResponder(self.annotationOverlay)
+        }
+
+        annotationOverlay.onStepSelectionChanged = { [weak self] badge in
+            guard let self else { return }
+            if let badge = badge {
+                self.stepNumberField.integerValue = badge.number
+                self.stepNumberField.isEditable   = true
+                self.stepDiameterSlider.doubleValue = Double(badge.diameter)
+                self.stepDiameterLabel.stringValue  = fmt(badge.diameter)
+                self.stepFillColorWell.color  = badge.fillColor
+                self.stepTextColorWell.color  = badge.textColor
+            } else {
+                let nextNum = min(99, (self.grabbitDocument.stepBadges.map { $0.number }.max() ?? 0) + 1)
+                self.stepNumberField.integerValue = nextNum
+                self.stepNumberField.isEditable   = false
+            }
         }
 
         annotationOverlay.onTextSelectionChanged = { [weak self] ann in
@@ -654,6 +710,17 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         }
     }
 
+    @objc private func toggleStepTool(_ sender: NSButton) {
+        if sender.state == .on {
+            syncToolbarState(to: .step)
+            annotationOverlay.activeTool = .step
+            window?.makeFirstResponder(annotationOverlay)
+        } else {
+            syncToolbarState(to: .none)
+            annotationOverlay.activeTool = .none
+        }
+    }
+
     @objc private func toggleCropTool(_ sender: NSButton) {
         if sender.state == .on {
             syncToolbarState(to: .none)   // crop has no annotation tool equivalent
@@ -676,6 +743,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         highlightToolButton.state = tool == .highlight ? .on : .off
         ocrToolButton.state       = tool == .ocr       ? .on : .off
         spotlightToolButton.state = tool == .spotlight ? .on : .off
+        stepToolButton.state      = tool == .step      ? .on : .off
         switch tool {
         case .arrow:     toolMode = .arrow
         case .text:      toolMode = .text
@@ -684,6 +752,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         case .highlight: toolMode = .highlight
         case .ocr:       toolMode = .ocr
         case .spotlight: toolMode = .spotlight
+        case .step:      toolMode = .step
         case .none:      toolMode = .none
         }
         sidebar.setToolMode(toolMode)
@@ -1093,6 +1162,34 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         zoomLabel.stringValue = "\(Int(round(zoomScroll.magnification * 100)))%"
     }
 
+    /// Compute and apply a magnification that fits the image comfortably in the
+    /// visible scroll area, capped at 1.0 so we never zoom in past 100%.
+    private func applyFitZoom() {
+        guard let img = grabbitDocument.currentImage as NSImage?,
+              let scrollView = zoomScroll else { return }
+
+        // image.size is stored in pixels (CaptureSession sets size = pixel dimensions).
+        // NSImageView renders the image at image.size points at magnification=1, so a
+        // 1840px capture occupies 1840pt in the document view. We compute the magnification
+        // needed to fit those points into the visible scroll area.
+        let imgW = img.size.width
+        let imgH = img.size.height
+        guard imgW > 0, imgH > 0 else { return }
+
+        // Use scrollView.frame (reliable after layout) minus the canvas padding.
+        let pad: CGFloat = 32
+        let availW = scrollView.frame.width  - pad * 2
+        let availH = scrollView.frame.height - pad * 2
+        guard availW > 0, availH > 0 else { return }
+
+        // Scale to fit, but never zoom in beyond 100%.
+        let fitMag = min(1.0, min(availW / imgW, availH / imgH))
+        let clampedMag = fitMag.clamped(to: scrollView.minMagnification...scrollView.maxMagnification)
+
+        scrollView.magnification = clampedMag
+        updateZoomLabel()
+    }
+
     // MARK: - Sidebar control actions
 
     @objc private func borderToggleChanged(_ btn: NSButton) {
@@ -1228,6 +1325,32 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         annotationOverlay.needsDisplay = true
     }
 
+    @objc private func stepDiameterChanged(_ s: NSSlider) {
+        grabbitDocument.stepDiameter = CGFloat(s.doubleValue)
+        stepDiameterLabel.stringValue = fmt(grabbitDocument.stepDiameter)
+        annotationOverlay.currentStepDiameter = grabbitDocument.stepDiameter
+        annotationOverlay.updateSelectedStep(diameter: grabbitDocument.stepDiameter)
+        annotationOverlay.needsDisplay = true
+        grabbitDocument.savePrefs()
+    }
+
+    @objc private func stepNumberChanged(_ field: NSTextField) {
+        let n = max(1, min(99, field.integerValue))
+        field.integerValue = n
+        annotationOverlay.updateSelectedStep(number: n)
+        annotationOverlay.needsDisplay = true
+    }
+
+    // MARK: - NSTextFieldDelegate
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === stepNumberField else { return }
+        let n = max(1, min(99, field.integerValue))
+        field.integerValue = n
+        annotationOverlay.updateSelectedStep(number: n)
+        annotationOverlay.needsDisplay = true
+    }
+
     @objc private func colorPanelChanged() {
         if borderColorWell.isActive {
             grabbitDocument.borderColor = borderColorWell.color; refreshBaseImage()
@@ -1261,6 +1384,16 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             grabbitDocument.spotlightOverlayColor = spotlightOverlayColorWell.color
             annotationOverlay.currentSpotlightOverlayColor = grabbitDocument.spotlightOverlayColor
             annotationOverlay.updateSelectedSpotlight(overlayColor: grabbitDocument.spotlightOverlayColor)
+            annotationOverlay.needsDisplay = true
+        } else if stepFillColorWell.isActive {
+            grabbitDocument.stepFillColor = stepFillColorWell.color
+            annotationOverlay.currentStepFillColor = grabbitDocument.stepFillColor
+            annotationOverlay.updateSelectedStep(fillColor: grabbitDocument.stepFillColor)
+            annotationOverlay.needsDisplay = true
+        } else if stepTextColorWell.isActive {
+            grabbitDocument.stepTextColor = stepTextColorWell.color
+            annotationOverlay.currentStepTextColor = grabbitDocument.stepTextColor
+            annotationOverlay.updateSelectedStep(textColor: grabbitDocument.stepTextColor)
             annotationOverlay.needsDisplay = true
         }
         grabbitDocument.savePrefs()
@@ -1329,6 +1462,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         blurToolButton.isEnabled      = false
         highlightToolButton.isEnabled = false
         spotlightToolButton.isEnabled = false
+        stepToolButton.isEnabled      = false
         cropToolButton.isEnabled      = false
         resizeToolButton.isEnabled    = false
         ocrToolButton.isEnabled       = false
@@ -1343,6 +1477,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         blurToolButton.isEnabled      = true
         highlightToolButton.isEnabled = true
         spotlightToolButton.isEnabled = true
+        stepToolButton.isEnabled      = true
         cropToolButton.isEnabled      = true
         resizeToolButton.isEnabled    = true
         ocrToolButton.isEnabled       = true
@@ -1415,6 +1550,14 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
 
     // MARK: - NSWindowDelegate
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard !hasAppliedInitialZoom, grabbitDocument.hasImage else { return }
+        hasAppliedInitialZoom = true
+        // Defer one run-loop cycle so Auto Layout has finished its first pass
+        // and the scroll view has its real bounds before we compute the fit zoom.
+        DispatchQueue.main.async { [weak self] in self?.applyFitZoom() }
+    }
+
     func windowWillClose(_ notification: Notification) {
         if let m = toolShortcutMonitor { NSEvent.removeMonitor(m); toolShortcutMonitor = nil }
         NotificationCenter.default.removeObserver(self,
@@ -1438,6 +1581,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     @objc func activateBlurTool(_ sender: Any?)      { guard blurToolButton.isEnabled      else { return }; blurToolButton.performClick(nil) }
     @objc func activateHighlightTool(_ sender: Any?) { guard highlightToolButton.isEnabled else { return }; highlightToolButton.performClick(nil) }
     @objc func activateSpotlightTool(_ sender: Any?) { guard spotlightToolButton.isEnabled else { return }; spotlightToolButton.performClick(nil) }
+    @objc func activateStepTool(_ sender: Any?)      { guard stepToolButton.isEnabled      else { return }; stepToolButton.performClick(nil) }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let toolSelectors: [Selector] = [
@@ -1445,7 +1589,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             #selector(activateOCRTool(_:)),    #selector(activateArrowTool(_:)),
             #selector(activateTextTool(_:)),   #selector(activateShapeTool(_:)),
             #selector(activateBlurTool(_:)),   #selector(activateHighlightTool(_:)),
-            #selector(activateSpotlightTool(_:)),
+            #selector(activateSpotlightTool(_:)), #selector(activateStepTool(_:)),
         ]
         if let action = menuItem.action, toolSelectors.contains(action) {
             return grabbitDocument.hasImage
@@ -1485,6 +1629,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         if matches(toolShortcuts.blur),      blurToolButton.isEnabled      { blurToolButton.performClick(nil);      return true }
         if matches(toolShortcuts.highlight), highlightToolButton.isEnabled { highlightToolButton.performClick(nil); return true }
         if matches(toolShortcuts.spotlight), spotlightToolButton.isEnabled { spotlightToolButton.performClick(nil); return true }
+        if matches(toolShortcuts.step),      stepToolButton.isEnabled      { stepToolButton.performClick(nil);      return true }
         return false
     }
 

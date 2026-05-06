@@ -302,11 +302,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         ]
         menu.addItem(.separator())
         toolMenuItems += [
-            addTool("Arrow",        action: #selector(EditorWindowController.activateArrowTool(_:)),     config: sc.arrow),
-            addTool("Text",         action: #selector(EditorWindowController.activateTextTool(_:)),      config: sc.text),
-            addTool("Shape",        action: #selector(EditorWindowController.activateShapeTool(_:)),     config: sc.shape),
-            addTool("Blur",         action: #selector(EditorWindowController.activateBlurTool(_:)),      config: sc.blur),
-            addTool("Highlight",    action: #selector(EditorWindowController.activateHighlightTool(_:)), config: sc.highlight),
+            addTool("Arrow",        action: #selector(EditorWindowController.activateArrowTool(_:)),       config: sc.arrow),
+            addTool("Text",         action: #selector(EditorWindowController.activateTextTool(_:)),        config: sc.text),
+            addTool("Shape",        action: #selector(EditorWindowController.activateShapeTool(_:)),       config: sc.shape),
+            addTool("Blur",         action: #selector(EditorWindowController.activateBlurTool(_:)),        config: sc.blur),
+            addTool("Highlight",    action: #selector(EditorWindowController.activateHighlightTool(_:)),   config: sc.highlight),
+            addTool("Spotlight",    action: #selector(EditorWindowController.activateSpotlightTool(_:)),   config: sc.spotlight),
+            addTool("Step",         action: #selector(EditorWindowController.activateStepTool(_:)),        config: sc.step),
         ]
 
         return menu
@@ -316,7 +318,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         let configs: [HotkeyConfig] = [
             shortcuts.crop, shortcuts.resize, shortcuts.ocr,
             shortcuts.arrow, shortcuts.text, shortcuts.shape,
-            shortcuts.blur, shortcuts.highlight,
+            shortcuts.blur, shortcuts.highlight, shortcuts.spotlight, shortcuts.step,
         ]
         for (item, config) in zip(toolMenuItems, configs) {
             item.keyEquivalent = config.menuKeyEquivalent
