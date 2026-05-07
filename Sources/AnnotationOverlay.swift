@@ -386,7 +386,13 @@ class AnnotationOverlay: NSView {
         }
         if case .newBlur(let s, let c) = dragState {
             let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
-            drawBlurRegionBorder(rect, selected: false)
+            let normRect = viewRectToNorm(rect)
+            var preview = BlurRegion(rect: normRect,
+                                     intensity: currentBlurIntensity,
+                                     style: currentBlurStyle)
+            drawBlurRegion(preview, viewRect: rect, selected: false)
+            // Draw the placing border on top of the blur preview.
+            drawBlurRegionBorder(rect, selected: false, placing: true)
         }
         if case .newHighlight(let s, let c) = dragState {
             let rect = CGRect(origin: s, size: CGSize(width: c.x-s.x, height: c.y-s.y)).standardized
@@ -543,12 +549,19 @@ class AnnotationOverlay: NSView {
         if selected { drawCornerHandles(for: viewRect) }
     }
 
-    private func drawBlurRegionBorder(_ rect: CGRect, selected: Bool) {
+    private func drawBlurRegionBorder(_ rect: CGRect, selected: Bool, placing: Bool = false) {
         let path = NSBezierPath(rect: rect)
-        path.lineWidth = selected ? 2 : 1.5
-        (selected ? NSColor.selectedControlColor
-                  : NSColor.white.withAlphaComponent(0.6)).setStroke()
-        path.setLineDash([6, 3], count: 2, phase: 0); path.stroke()
+        if placing {
+            // Solid, clearly visible border while the user is dragging to place the blur region.
+            path.lineWidth = 2
+            NSColor.controlAccentColor.setStroke()
+            path.stroke()
+        } else {
+            path.lineWidth = selected ? 2 : 1.5
+            (selected ? NSColor.selectedControlColor
+                      : NSColor.white.withAlphaComponent(0.6)).setStroke()
+            path.setLineDash([6, 3], count: 2, phase: 0); path.stroke()
+        }
     }
 
     private func drawHighlightRect(_ rect: CGRect, color: NSColor,
