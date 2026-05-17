@@ -96,9 +96,11 @@ class OverlayWindowController: NSWindowController {
             if let cgWindow = CGWindowListCreateImage(
                 .null, .optionIncludingWindow, wid, imageOptions),
                cgWindow.width > 0, cgWindow.height > 0 {
-                // Set size = pixel dimensions so the pipeline treats size as pixels.
-                let pixelSize = NSSize(width: cgWindow.width, height: cgWindow.height)
-                let captured = NSImage(cgImage: cgWindow, size: pixelSize)
+                // CGWindowListCreateImage fills rounded-corner areas with opaque black.
+                // Clip to a rounded rect so those corners are transparent in the output.
+                let finalCG = transparentCorners(cgWindow, scale: screen.backingScaleFactor)
+                let pixelSize = NSSize(width: finalCG.width, height: finalCG.height)
+                let captured = NSImage(cgImage: finalCG, size: pixelSize)
                 dismiss()
                 CaptureSession.captureDidFinish(image: captured)
                 return
@@ -130,6 +132,64 @@ class OverlayWindowController: NSWindowController {
         let cropped = NSImage(cgImage: cgCropped, size: NSSize(width: cgCropped.width, height: cgCropped.height))
         dismiss()
         CaptureSession.captureDidFinish(image: cropped)
+    }
+
+    /// Redraws a window image into an alpha context clipped to a rounded rect,
+    /// removing the opaque black fill CGWindowListCreateImage produces for
+    /// windows with rounded corners (Finder, Safari, etc.).
+    /// Returns the original image unchanged if no black corners are detected.
+    private func transparentCorners(_ cgImage: CGImage, scale: CGFloat) -> CGImage {
+        let r = detectedCornerRadius(in: cgImage)
+        guard r > 0 else { return cgImage }
+
+        let w = cgImage.width, h = cgImage.height
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return cgImage }
+        ctx.addPath(CGPath(
+            roundedRect: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)),
+            cornerWidth: r, cornerHeight: r, transform: nil))
+        ctx.clip()
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        return ctx.makeImage() ?? cgImage
+    }
+
+    /// Samples a corner of the image to measure the black fill CGWindowListCreateImage
+    /// places in rounded-corner areas. Returns the detected radius in pixels, or 0 if
+    /// no meaningful black fill is found (window has no rounded corners, or is rectangular).
+    private func detectedCornerRadius(in cgImage: CGImage) -> CGFloat {
+        let maxScan = min(80, cgImage.width / 4, cgImage.height / 4)
+        guard maxScan > 4 else { return 0 }
+
+        // Crop the corner at CG (x=0, y=0). macOS windows have rounded corners on all
+        // four sides with the same radius, so any corner works regardless of Y orientation.
+        guard let corner = cgImage.cropping(to: CGRect(x: 0, y: 0, width: maxScan, height: maxScan))
+        else { return 0 }
+
+        // Render into a known RGBA8 layout for straightforward byte access.
+        guard let ctx = CGContext(
+            data: nil, width: maxScan, height: maxScan,
+            bitsPerComponent: 8, bytesPerRow: maxScan * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return 0 }
+        ctx.draw(corner, in: CGRect(x: 0, y: 0, width: maxScan, height: maxScan))
+
+        guard let ptr = ctx.data?.bindMemory(to: UInt8.self, capacity: maxScan * maxScan * 4)
+        else { return 0 }
+
+        // Scan the bottom row (memory row 0, RGBA). Black pixels are corner fill.
+        var edge = 0
+        for x in 0..<maxScan {
+            let off = x * 4
+            if Int(ptr[off]) + Int(ptr[off + 1]) + Int(ptr[off + 2]) > 30 { edge = x; break }
+            if x == maxScan - 1 { return 0 }   // whole row is black — unexpected, bail
+        }
+        guard edge > 2 else { return 0 }        // no meaningful corner fill
+        return CGFloat(edge) + 4                // +4 px margin to cover the arc fully
     }
 }
 
