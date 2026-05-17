@@ -17,6 +17,14 @@ import UniformTypeIdentifiers
 
 class GrabbitDocument: NSDocument {
 
+    // Each document gets its own private undo stack so multiple documents can
+    // coexist in a single editor window with independent Cmd+Z histories.
+    private lazy var _undoManager = UndoManager()
+    override var undoManager: UndoManager? {
+        get { _undoManager }
+        set { /* always use the private per-document instance */ }
+    }
+
     // MARK: - Model state
 
     /// The base image (after any crops). Starts as the captured/opened image.
@@ -67,7 +75,7 @@ class GrabbitDocument: NSDocument {
     private(set) var stepBadges:      [StepBadge]      = []
 
     // Z-order counter — only ever incremented, never decremented.
-    private var zOrderCounter: Int = 0
+    var zOrderCounter: Int = 0
     func nextZOrder() -> Int { zOrderCounter += 1; return zOrderCounter }
 
     // Simple dirty flag — set on any mutation, cleared on save.
@@ -801,5 +809,49 @@ class GrabbitDocument: NSDocument {
         saveDouble(Double(stepDiameter),      key: Prefs.stepDiameter)
         saveColor(stepFillColor,              key: Prefs.stepFillColor)
         saveColor(stepTextColor,              key: Prefs.stepTextColor)
+    }
+
+    // MARK: - Apply saved annotation data (bypasses undo stack)
+
+    func applyAnnotations(_ data: GrabbitDocumentData) {
+        borderWeight  = CGFloat(data.borderWeight)
+        borderColor   = data.borderColor.nsColor
+        borderEnabled = data.borderEnabled
+        shadowOffsetX = CGFloat(data.shadowOffsetX)
+        shadowOffsetY = CGFloat(data.shadowOffsetY)
+        shadowBlur    = CGFloat(data.shadowBlur)
+        shadowColor   = data.shadowColor.nsColor
+        shadowOpacity = CGFloat(data.shadowOpacity)
+        shadowEnabled = data.shadowEnabled
+
+        arrowWeight       = CGFloat(data.arrowWeight)
+        arrowColor        = data.arrowColor.nsColor
+        textFontName      = data.textFontName
+        textFontSize      = CGFloat(data.textFontSize)
+        textFontColor     = data.textFontColor.nsColor
+        textOutlineColor  = data.textOutlineColor.nsColor
+        textOutlineWeight = CGFloat(data.textOutlineWeight)
+        shapeBorderWeight = CGFloat(data.shapeBorderWeight)
+        shapeBorderColor  = data.shapeBorderColor.nsColor
+        shapeFillColor    = data.shapeFillColor.nsColor
+        highlightColor    = data.highlightColor.nsColor
+        highlightOpacity  = CGFloat(data.highlightOpacity)
+        spotlightOverlayColor   = data.spotlightOverlayColor.nsColor
+        spotlightOverlayOpacity = CGFloat(data.spotlightOverlayOpacity)
+        spotlightShapeType      = data.spotlightShapeType.shapeType
+        stepDiameter  = CGFloat(data.stepDiameter)
+        stepFillColor = data.stepFillColor.nsColor
+        stepTextColor = data.stepTextColor.nsColor
+
+        arrows          = data.arrows.map          { $0.arrow }
+        textAnnotations = data.textAnnotations.map { $0.textAnnotation }
+        shapes          = data.shapes.map          { $0.shape }
+        blurRegions     = data.blurRegions.map     { $0.blurRegion }
+        highlights      = data.highlights.map      { $0.highlight }
+        spotlights      = data.spotlights.map      { $0.spotlight }
+        stepBadges      = data.stepBadges.map      { $0.stepBadge }
+        zOrderCounter   = data.zOrderCounter
+
+        isDirty = false
     }
 }

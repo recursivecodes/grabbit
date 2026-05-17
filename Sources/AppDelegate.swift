@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Become the notification delegate so banners appear on screen.
         UNUserNotificationCenter.current().delegate = self
+        LibraryManager.shared.ensureLibraryDirectory()
         setupMainMenu()
         setupStatusBar()
         hotkeyManager = HotkeyManager(
@@ -50,7 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         fileMenu.addItem(withTitle: "Close Image", action: Selector(("closeImage:")), keyEquivalent: "w")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Save", action: Selector(("save:")), keyEquivalent: "s")
-        fileMenu.addItem(withTitle: "Save As…", action: Selector(("saveAs:")), keyEquivalent: "S")
+        fileMenu.addItem(withTitle: "Export as PNG…", action: Selector(("saveAs:")), keyEquivalent: "S")
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
 
@@ -209,20 +210,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
     }
 
     @objc private func quitGrabbit() {
-        let dirtyEditors = NSApp.windows
-            .compactMap { $0.windowController as? EditorWindowController }
-            .filter { $0.grabbitDocument.isDirty }
+        let dirtyCount = EditorWindowController.shared?.libraryDocuments
+            .filter { $0.isDirty }.count ?? 0
 
-        guard !dirtyEditors.isEmpty else {
-            NSApp.terminate(nil)
-            return
-        }
+        guard dirtyCount > 0 else { NSApp.terminate(nil); return }
 
-        let count = dirtyEditors.count
         let alert = NSAlert()
-        alert.messageText = count == 1
+        alert.messageText = dirtyCount == 1
             ? "You have unsaved changes. Quit anyway?"
-            : "You have \(count) images with unsaved changes. Quit anyway?"
+            : "You have \(dirtyCount) images with unsaved changes. Quit anyway?"
         alert.informativeText = "Your unsaved changes will be lost."
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Cancel")
@@ -249,11 +245,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         guard panel.runModal() == .OK, let url = panel.url,
               let image = NSImage(contentsOf: url) else { return }
 
-        if let editor = NSApp.keyWindow?.windowController as? EditorWindowController {
-            editor.replaceImage(image)
-        } else {
-            EditorWindowController.show(image: image)
-        }
+        addImageToLibrary(image)
     }
 
     @objc func newFromClipboard() {
@@ -269,10 +261,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
             return
         }
 
-        if let editor = NSApp.keyWindow?.windowController as? EditorWindowController {
-            editor.replaceImage(image)
-        } else {
-            EditorWindowController.show(image: image)
+        addImageToLibrary(image)
+    }
+
+    private func addImageToLibrary(_ image: NSImage) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let libraryURL = LibraryManager.shared.saveCapture(image)
+            DispatchQueue.main.async {
+                let doc = GrabbitDocument(image: image)
+                if let editor = EditorWindowController.shared {
+                    editor.addLibraryEntry(document: doc, libraryURL: libraryURL,
+                                           capturedAt: Date())
+                    editor.window?.orderFront(nil)
+                } else {
+                    EditorWindowController.showWithLibrary(firstDoc: doc,
+                                                          libraryURL: libraryURL)
+                }
+                EditorWindowController.activateApp()
+            }
         }
     }
 
@@ -361,6 +367,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsWindowControllerDele
         NSApp.windows
             .compactMap { $0.windowController as? EditorWindowController }
             .forEach { $0.updateToolShortcuts(shortcuts) }
+    }
+
+    func settingsDidUpdateLibraryPath(_ path: String) {
+        LibraryManager.shared.libraryPath = path
+        LibraryManager.shared.ensureLibraryDirectory()
     }
 
     // MARK: - UNUserNotificationCenterDelegate

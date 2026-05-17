@@ -7,6 +7,7 @@ protocol SettingsWindowControllerDelegate: AnyObject {
     func settingsDidUpdateHotkey(_ config: HotkeyConfig)
     func settingsDidUpdateQuickHotkey(_ config: HotkeyConfig)
     func settingsDidUpdateToolShortcuts(_ shortcuts: ToolShortcutsConfig)
+    func settingsDidUpdateLibraryPath(_ path: String)
 }
 
 // MARK: - SettingsWindowController
@@ -22,6 +23,8 @@ class SettingsWindowController: NSWindowController {
     private var quickHotkeyRecorder: HotkeyRecorderView!
     private var previewLabel:        NSTextField!
     private var quickPreviewLabel:   NSTextField!
+
+    private var libraryPathField:  NSTextField!
 
     private var cropRecorder:      HotkeyRecorderView!
     private var resizeRecorder:    HotkeyRecorderView!
@@ -61,7 +64,7 @@ class SettingsWindowController: NSWindowController {
         self.currentToolShortcuts = toolShortcuts
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 680),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -212,6 +215,54 @@ class SettingsWindowController: NSWindowController {
         let stepLabel = makeRowLabel("Step")
         stepRecorder  = makeRecorder(currentToolShortcuts.step)
         stepRecorder.onConfigChanged = { [weak self] cfg in guard let self else { return }; self.currentToolShortcuts.step = cfg }
+
+        // ── Library separator ────────────────────────────────────────────────────
+        let libSep = NSBox()
+        libSep.boxType = .custom; libSep.borderWidth = 0
+        libSep.fillColor = NSColor.separatorColor
+        libSep.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(libSep)
+
+        // ── Library section header ───────────────────────────────────────────────
+        let libSectionLabel = NSTextField(labelWithString: "Library")
+        libSectionLabel.font = .boldSystemFont(ofSize: 13)
+        libSectionLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(libSectionLabel)
+
+        let libDescLabel = NSTextField(
+            labelWithString: "Screenshots are automatically saved here.")
+        libDescLabel.font = .systemFont(ofSize: 11)
+        libDescLabel.textColor = .secondaryLabelColor
+        libDescLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(libDescLabel)
+
+        let libRowLabel = NSTextField(labelWithString: "Location")
+        libRowLabel.font = .systemFont(ofSize: 12)
+        libRowLabel.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(libRowLabel)
+
+        let pathField = NSTextField()
+        pathField.placeholderString = LibraryManager.defaultLibraryPath
+        pathField.stringValue       = LibraryManager.shared.libraryPath
+        pathField.isEditable        = true
+        pathField.isContinuous      = false
+        pathField.font              = .systemFont(ofSize: 11)
+        pathField.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(pathField)
+        libraryPathField = pathField
+
+        let chooseBtn = NSButton(title: "Choose…", target: self,
+                                 action: #selector(chooseLibraryPath))
+        chooseBtn.bezelStyle = .rounded
+        chooseBtn.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(chooseBtn)
+
+        let resetBtn = NSButton(title: "Restore Default", target: self,
+                                action: #selector(resetLibraryPath))
+        resetBtn.bezelStyle = .rounded
+        resetBtn.controlSize = .small
+        resetBtn.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(resetBtn)
 
         // ── Buttons ──────────────────────────────────────────────────────────────
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
@@ -369,6 +420,35 @@ class SettingsWindowController: NSWindowController {
             stepRecorder.widthAnchor.constraint(equalToConstant: 120),
             stepRecorder.heightAnchor.constraint(equalToConstant: 26),
 
+            // Library separator
+            libSep.topAnchor.constraint(equalTo: stepRecorder.bottomAnchor, constant: 16),
+            libSep.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            libSep.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            libSep.heightAnchor.constraint(equalToConstant: 1),
+
+            // Library header
+            libSectionLabel.topAnchor.constraint(equalTo: libSep.bottomAnchor, constant: 14),
+            libSectionLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+
+            libDescLabel.topAnchor.constraint(equalTo: libSectionLabel.bottomAnchor, constant: 4),
+            libDescLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            libDescLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+
+            // Library path row
+            libRowLabel.topAnchor.constraint(equalTo: libDescLabel.bottomAnchor, constant: 12),
+            libRowLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            libRowLabel.widthAnchor.constraint(equalToConstant: 70),
+
+            pathField.centerYAnchor.constraint(equalTo: libRowLabel.centerYAnchor),
+            pathField.leadingAnchor.constraint(equalTo: libRowLabel.trailingAnchor, constant: 8),
+            pathField.trailingAnchor.constraint(equalTo: chooseBtn.leadingAnchor, constant: -8),
+
+            chooseBtn.centerYAnchor.constraint(equalTo: libRowLabel.centerYAnchor),
+            chooseBtn.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+
+            resetBtn.topAnchor.constraint(equalTo: libRowLabel.bottomAnchor, constant: 8),
+            resetBtn.leadingAnchor.constraint(equalTo: pathField.leadingAnchor),
+
             // Buttons
             cancelButton.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
             cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
@@ -393,6 +473,7 @@ class SettingsWindowController: NSWindowController {
         highlightRecorder?.setConfig(currentToolShortcuts.highlight)
         spotlightRecorder?.setConfig(currentToolShortcuts.spotlight)
         stepRecorder?.setConfig(currentToolShortcuts.step)
+        libraryPathField?.stringValue = LibraryManager.shared.libraryPath
         refreshPreview()
     }
 
@@ -409,7 +490,27 @@ class SettingsWindowController: NSWindowController {
         delegate?.settingsDidUpdateHotkey(currentConfig)
         delegate?.settingsDidUpdateQuickHotkey(currentQuickConfig)
         delegate?.settingsDidUpdateToolShortcuts(currentToolShortcuts)
+        let path = libraryPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !path.isEmpty {
+            delegate?.settingsDidUpdateLibraryPath(path)
+        }
         close()
+    }
+
+    @objc private func chooseLibraryPath() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Library Folder"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Select"
+        if panel.runModal() == .OK, let url = panel.url {
+            libraryPathField.stringValue = url.path
+        }
+    }
+
+    @objc private func resetLibraryPath() {
+        libraryPathField.stringValue = LibraryManager.defaultLibraryPath
     }
 }
 

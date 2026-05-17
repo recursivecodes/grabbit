@@ -63,11 +63,25 @@ class CaptureSession {
     static func captureDidFinish(image: NSImage) {
         switch mode {
         case .editor:
-            let doc = GrabbitDocument(image: image)
-            NSDocumentController.shared.addDocument(doc)
-            doc.makeWindowControllers()
-            doc.showWindows()
-            EditorWindowController.activateApp()
+            // Extract a CGImage on the main thread before dispatching — NSImage is not
+            // thread-safe and must not be drawn from a background thread.
+            guard let cgImg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let libraryURL = LibraryManager.shared.saveCaptureCG(cgImg)
+                DispatchQueue.main.async {
+                    if let editor = EditorWindowController.shared {
+                        let doc = GrabbitDocument(image: image)
+                        editor.addLibraryEntry(document: doc, libraryURL: libraryURL,
+                                               capturedAt: Date())
+                        editor.window?.orderFront(nil)
+                    } else {
+                        let doc = GrabbitDocument(image: image)
+                        EditorWindowController.showWithLibrary(firstDoc: doc,
+                                                               libraryURL: libraryURL)
+                    }
+                    EditorWindowController.activateApp()
+                }
+            }
         case .quickClipboard:
             let pb = NSPasteboard.general
             pb.clearContents()

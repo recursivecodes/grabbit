@@ -8,8 +8,21 @@ import Vision
 
 class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSTextFieldDelegate {
 
+    // Shared single-window instance; set in init, cleared on close.
+    static weak var shared: EditorWindowController?
+
     // MARK: Document
-    private(set) var grabbitDocument: GrabbitDocument
+    var grabbitDocument: GrabbitDocument
+
+    // MARK: Library (multi-document strip)
+    var libraryDocuments:    [GrabbitDocument]  = []
+    var libraryEntries:      [LibraryEntry]     = []
+    var currentLibraryIndex: Int                = -1
+    var thumbCells:          [LibraryThumbCell] = []
+    var thumbStack:                 NSStackView!
+    var thumbScroll:                NSScrollView!
+    var thumbStripHeightConstraint: NSLayoutConstraint!
+    private var footerResizeHandle: FooterResizeHandle!
 
     // MARK: Views
     var captureView:             NSImageView!
@@ -23,7 +36,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     private var highlightToolButton: NSButton!
     private var spotlightToolButton: NSButton!
     private var stepToolButton:      NSButton!
-    private var zoomScroll:      NSScrollView!
+    var zoomScroll:      NSScrollView!
     private var zoomLabel:       NSTextField!
     private var cropToolButton:   NSButton!
     private var resizeToolButton: NSButton!
@@ -66,25 +79,40 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
     private var toolMode: ToolMode = .none
     private var toolShortcuts = ToolShortcutsConfig.load()
     private var toolShortcutMonitor: Any?
-    private var hasAppliedInitialZoom = false
+    var hasAppliedInitialZoom = false
 
     // MARK: - Show helpers (used by CaptureSession / AppDelegate)
 
-    static func show(image: NSImage) {
-        let doc = GrabbitDocument(image: image)
-        NSDocumentController.shared.addDocument(doc)
-        doc.makeWindowControllers()
-        doc.showWindows()
-        activateApp()
-    }
-
+    /// Opens (or raises) the shared editor and loads existing library items.
+    /// Called when the user selects "Open Editor" with no pending capture.
     static func showEmpty() {
+        if let editor = shared {
+            editor.window?.makeKeyAndOrderFront(nil)
+            activateApp()
+            return
+        }
         let doc = GrabbitDocument(image: NSImage(size: NSSize(width: 1, height: 1)),
                                   hasImage: false)
         NSDocumentController.shared.addDocument(doc)
         doc.makeWindowControllers()
         doc.showWindows()
+        shared?.loadExistingLibraryItems()
+        if let idx = shared?.libraryDocuments.indices.last {
+            shared?.switchToEntry(at: idx)
+        }
         activateApp()
+    }
+
+    /// Creates the shared editor for a brand-new capture (the first one this session).
+    /// `firstDoc` is the GrabbitDocument already created for the capture.
+    /// `libraryURL` is where the PNG was written (nil if saving failed).
+    static func showWithLibrary(firstDoc: GrabbitDocument, libraryURL: URL?) {
+        NSDocumentController.shared.addDocument(firstDoc)
+        firstDoc.makeWindowControllers()   // sets shared = self in init
+        firstDoc.showWindows()
+        let excluded: Set<URL> = libraryURL.map { [$0] } ?? []
+        shared?.loadExistingLibraryItems(excluding: excluded)
+        shared?.addLibraryEntry(document: firstDoc, libraryURL: libraryURL, capturedAt: Date())
     }
 
     static func activateApp() {
@@ -225,9 +253,47 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         toolbarSep.fillColor = NSColor.separatorColor; toolbarSep.cornerRadius = 0
         toolbarSep.translatesAutoresizingMaskIntoConstraints = false
 
+        // ── Thumbnail strip ──────────────────────────────────────────────────────────
+        let thumbStripH = min(300, max(60, CGFloat(loadDouble(Prefs.footerHeight, default: 110))))
+
+        let thumbSep = NSBox()
+        thumbSep.boxType = .custom; thumbSep.borderWidth = 0
+        thumbSep.fillColor = NSColor.separatorColor; thumbSep.cornerRadius = 0
+        thumbSep.translatesAutoresizingMaskIntoConstraints = false
+
+        let ts = NSStackView()
+        ts.orientation = .horizontal
+        ts.spacing = 8
+        ts.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        ts.alignment  = .centerY
+        ts.translatesAutoresizingMaskIntoConstraints = false
+
+        let tScroll = NSScrollView()
+        tScroll.hasVerticalScroller   = false
+        tScroll.hasHorizontalScroller = true
+        tScroll.autohidesScrollers    = true
+        tScroll.scrollerStyle         = .overlay
+        tScroll.drawsBackground       = false
+        tScroll.documentView          = ts
+        tScroll.translatesAutoresizingMaskIntoConstraints = false
+
+        // Pin the stack view inside the scroll view's content area.
+        NSLayoutConstraint.activate([
+            ts.topAnchor.constraint(equalTo: tScroll.contentView.topAnchor),
+            ts.bottomAnchor.constraint(equalTo: tScroll.contentView.bottomAnchor),
+            ts.leadingAnchor.constraint(equalTo: tScroll.contentView.leadingAnchor),
+        ])
+
+        let thumbBg = NSVisualEffectView()
+        thumbBg.material = .sidebar
+        thumbBg.blendingMode = .withinWindow
+        thumbBg.state = .active
+        thumbBg.translatesAutoresizingMaskIntoConstraints = false
+
         let tbH: CGFloat = 44
         cv.addSubview(toolbarBg); cv.addSubview(toolbarSep)
         cv.addSubview(zs); cv.addSubview(toolsStack); cv.addSubview(zoomStack)
+        cv.addSubview(thumbBg); cv.addSubview(thumbSep); cv.addSubview(tScroll)
 
         NSLayoutConstraint.activate([
             toolbarBg.topAnchor.constraint(equalTo: cv.topAnchor),
@@ -239,14 +305,40 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
             toolbarSep.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
             toolbarSep.heightAnchor.constraint(equalToConstant: 1),
             zs.topAnchor.constraint(equalTo: cv.topAnchor, constant: tbH + 1),
-            zs.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+            zs.bottomAnchor.constraint(equalTo: thumbSep.topAnchor),
             zs.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
             zs.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            thumbSep.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            thumbSep.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            thumbSep.heightAnchor.constraint(equalToConstant: 1),
+            tScroll.topAnchor.constraint(equalTo: thumbSep.bottomAnchor),
+            tScroll.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            tScroll.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            tScroll.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+            thumbBg.topAnchor.constraint(equalTo: thumbSep.topAnchor),
+            thumbBg.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            thumbBg.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            thumbBg.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
             toolsStack.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
             toolsStack.centerYAnchor.constraint(equalTo: cv.topAnchor, constant: tbH / 2),
             zoomStack.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -12),
             zoomStack.centerYAnchor.constraint(equalTo: cv.topAnchor, constant: tbH / 2),
         ])
+
+        let hc = tScroll.heightAnchor.constraint(equalToConstant: thumbStripH)
+        hc.isActive = true
+        thumbStripHeightConstraint = hc
+
+        let resizeHandle = FooterResizeHandle()
+        resizeHandle.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(resizeHandle)
+        NSLayoutConstraint.activate([
+            resizeHandle.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            resizeHandle.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            resizeHandle.bottomAnchor.constraint(equalTo: thumbSep.bottomAnchor),
+            resizeHandle.heightAnchor.constraint(equalToConstant: 8),
+        ])
+        footerResizeHandle = resizeHandle
 
         // ── Crop overlay ─────────────────────────────────────────────────────────
         let co = CropOverlayView()
@@ -396,6 +488,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
 
         // ── IUO assignments ──────────────────────────────────────────────────────
         captureView = iv;  annotationOverlay = ol;  canvas = cv;  sidebar = sb
+        thumbStack = ts;   thumbScroll = tScroll
         arrowToolButton = arrowBtn;  textToolButton = textBtn;   shapeToolButton = shapeBtn
         blurToolButton = blurBtn;    highlightToolButton = highlightBtn
         spotlightToolButton = spotlightBtn; stepToolButton = stepBtn
@@ -431,8 +524,17 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         stepNumberField    = stepNumField
 
         super.init(window: win)
+        EditorWindowController.shared = self
         win.delegate = self
         setupToolShortcutMonitor()
+
+        footerResizeHandle.startHeight = { [weak self] in self?.thumbStripHeightConstraint.constant ?? 110 }
+        footerResizeHandle.onResize = { [weak self] newH in
+            guard let self else { return }
+            self.thumbStripHeightConstraint.constant = newH
+            for cell in self.thumbCells { cell.updateSize(footerHeight: newH) }
+            saveDouble(Double(newH), key: Prefs.footerHeight)
+        }
 
         // ── Wire targets ─────────────────────────────────────────────────────────
         arrowBtn.target     = self; arrowBtn.action     = #selector(toggleArrowTool(_:))
@@ -614,7 +716,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         }
 
         // ── Title-bar Save button ────────────────────────────────────────────────
-        let saveBtn = NSButton(title: "Save As…", target: self, action: #selector(saveAs(_:)))
+        let saveBtn = NSButton(title: "Export…", target: self, action: #selector(saveAs(_:)))
         saveBtn.bezelStyle = .rounded; saveBtn.controlSize = .small; saveBtn.sizeToFit()
         let acc = NSTitlebarAccessoryViewController()
         acc.view = saveBtn; acc.layoutAttribute = .right
@@ -1158,13 +1260,13 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
 
     @objc private func zoomDidEnd(_ note: Notification) { updateZoomLabel() }
 
-    private func updateZoomLabel() {
+    func updateZoomLabel() {
         zoomLabel.stringValue = "\(Int(round(zoomScroll.magnification * 100)))%"
     }
 
     /// Compute and apply a magnification that fits the image comfortably in the
     /// visible scroll area, capped at 1.0 so we never zoom in past 100%.
-    private func applyFitZoom() {
+    func applyFitZoom() {
         guard let img = grabbitDocument.currentImage as NSImage?,
               let scrollView = zoomScroll else { return }
 
@@ -1399,23 +1501,146 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         grabbitDocument.savePrefs()
     }
 
+    // MARK: - Library sync helpers (called from EditorWindowController+Library.swift)
+
+    /// Resets all annotation overlay drawing state to match a document's settings.
+    func rewireOverlayState(from doc: GrabbitDocument) {
+        annotationOverlay.currentWeight              = doc.arrowWeight
+        annotationOverlay.currentColor               = doc.arrowColor
+        annotationOverlay.currentFontName            = doc.textFontName
+        annotationOverlay.currentFontSize            = doc.textFontSize
+        annotationOverlay.currentFontColor           = doc.textFontColor
+        annotationOverlay.currentOutlineColor        = doc.textOutlineColor
+        annotationOverlay.currentOutlineWeight       = doc.textOutlineWeight
+        annotationOverlay.currentShapeType           = doc.shapeType
+        annotationOverlay.currentBorderWeight        = doc.shapeBorderWeight
+        annotationOverlay.currentBorderColor         = doc.shapeBorderColor
+        annotationOverlay.currentFillColor           = doc.shapeFillColor
+        annotationOverlay.currentHighlightColor      = doc.highlightColor
+        annotationOverlay.currentHighlightOpacity    = doc.highlightOpacity
+        annotationOverlay.currentSpotlightOverlayColor   = doc.spotlightOverlayColor
+        annotationOverlay.currentSpotlightOverlayOpacity = doc.spotlightOverlayOpacity
+        annotationOverlay.currentSpotlightShapeType      = doc.spotlightShapeType
+        annotationOverlay.currentStepDiameter        = doc.stepDiameter
+        annotationOverlay.currentStepFillColor       = doc.stepFillColor
+        annotationOverlay.currentStepTextColor       = doc.stepTextColor
+        annotationOverlay.activeTool = .none
+    }
+
+    /// Pushes a document's model state into all sidebar controls.
+    func syncSidebarToDocument(_ doc: GrabbitDocument) {
+        borderToggle.state      = doc.borderEnabled ? .on : .off
+        shadowToggle.state      = doc.shadowEnabled ? .on : .off
+        borderWeightSlider.doubleValue  = Double(doc.borderWeight)
+        borderWeightLabel.stringValue   = fmt(doc.borderWeight)
+        borderColorWell.color           = doc.borderColor
+        shadowXSlider.doubleValue       = Double(doc.shadowOffsetX)
+        shadowXLabel.stringValue        = fmt(doc.shadowOffsetX)
+        shadowYSlider.doubleValue       = Double(doc.shadowOffsetY)
+        shadowYLabel.stringValue        = fmt(doc.shadowOffsetY)
+        shadowBlurSlider.doubleValue    = Double(doc.shadowBlur)
+        shadowBlurLabel.stringValue     = fmt(doc.shadowBlur)
+        shadowColorWell.color           = doc.shadowColor
+        shadowOpacitySlider.doubleValue = Double(doc.shadowOpacity * 100)
+        shadowOpacityLabel.stringValue  = fmtPct(doc.shadowOpacity)
+
+        arrowWeightSlider.doubleValue = Double(doc.arrowWeight)
+        arrowWeightLabel.stringValue  = fmt(doc.arrowWeight)
+        arrowColorWell.color          = doc.arrowColor
+
+        let fontList = ["Helvetica-Bold", "Helvetica", "Arial-BoldMT", "ArialMT",
+                        "Courier-Bold", "Courier", "TimesNewRomanPS-BoldMT",
+                        "TimesNewRomanPSMT", "Georgia-Bold", "Georgia",
+                        "Menlo-Bold", "Menlo-Regular", "Monaco"]
+        if let idx = fontList.firstIndex(of: doc.textFontName) {
+            textFontPopup.selectItem(at: idx)
+        }
+        textFontSizeSlider.doubleValue      = Double(doc.textFontSize)
+        textFontSizeLabel.stringValue       = fmt(doc.textFontSize)
+        textFontColorWell.color             = doc.textFontColor
+        textOutlineColorWell.color          = doc.textOutlineColor
+        textOutlineWeightSlider.doubleValue = Double(doc.textOutlineWeight)
+        textOutlineWeightLabel.stringValue  = fmt(doc.textOutlineWeight)
+
+        let shapeTypes: [ShapeType] = [.rectangle, .circle, .roundedRectangle]
+        if let idx = shapeTypes.firstIndex(of: doc.shapeType) { shapeTypePopup.selectItem(at: idx) }
+        shapeBorderWeightSlider.doubleValue = Double(doc.shapeBorderWeight)
+        shapeBorderWeightLabel.stringValue  = fmt(doc.shapeBorderWeight)
+        shapeBorderColorWell.color          = doc.shapeBorderColor
+        shapeFillColorWell.color            = doc.shapeFillColor
+
+        highlightColorWell.color            = doc.highlightColor
+        highlightOpacitySlider.doubleValue  = Double(doc.highlightOpacity * 100)
+        highlightOpacityLabel.stringValue   = fmtPct(doc.highlightOpacity)
+
+        if let idx = shapeTypes.firstIndex(of: doc.spotlightShapeType) {
+            spotlightShapePopup.selectItem(at: idx)
+        }
+        spotlightOverlayColorWell.color    = doc.spotlightOverlayColor
+        spotlightOpacitySlider.doubleValue = Double(doc.spotlightOverlayOpacity * 100)
+        spotlightOpacityLabel.stringValue  = fmtPct(doc.spotlightOverlayOpacity)
+
+        stepDiameterSlider.doubleValue = Double(doc.stepDiameter)
+        stepDiameterLabel.stringValue  = fmt(doc.stepDiameter)
+        stepFillColorWell.color        = doc.stepFillColor
+        stepTextColorWell.color        = doc.stepTextColor
+        let nextStep = min(99, (doc.stepBadges.map { $0.number }.max() ?? 0) + 1)
+        stepNumberField.integerValue = nextStep
+        stepNumberField.isEditable   = false
+    }
+
+    /// Deactivates all toolbar/annotation tool buttons; called when switching entries.
+    func syncToolbarStateForSwitch() {
+        arrowToolButton.state     = .off
+        textToolButton.state      = .off
+        shapeToolButton.state     = .off
+        blurToolButton.state      = .off
+        highlightToolButton.state = .off
+        ocrToolButton.state       = .off
+        spotlightToolButton.state = .off
+        stepToolButton.state      = .off
+        cropToolButton.state      = .off
+        toolMode                  = .none
+        sidebar.setToolMode(.none)
+    }
+
+    /// Hides the crop overlay and resets the crop button; called when switching entries.
+    func deactivateCropToolForSwitch() {
+        cropToolButton.state = .off
+        cropOverlay.isHidden = true
+        cropOverlay.reset()
+    }
+
     // MARK: - Save / Copy
 
     @objc func copyImage(_ sender: Any?) { copyToClipboard() }
 
+    /// Exports the current image as a flat PNG/JPEG/TIFF (annotations are baked in).
     @objc func saveAs(_ sender: Any?) {
         annotationOverlay.finalizeEditing()
-        grabbitDocument.runModalSavePanel(for: .saveAsOperation,
-                                          delegate: nil, didSave: nil, contextInfo: nil)
+        guard let win = window else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png, .jpeg, .tiff]
+        panel.title = "Export Image"
+        panel.nameFieldStringValue = grabbitDocument.fileURL?.lastPathComponent ?? "capture.png"
+        panel.isExtensionHidden = false
+        panel.beginSheetModal(for: win) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            do {
+                try self.grabbitDocument.write(to: url, ofType: url.pathExtension)
+                self.grabbitDocument.fileURL = url
+            } catch {
+                self.grabbitDocument.presentError(error)
+            }
+        }
     }
 
+    /// Saves annotations to the .grabbit sidecar (Cmd+S).
+    /// The base PNG is never modified; to export a flat image use Export… (Cmd+Shift+S).
     @objc func save(_ sender: Any?) {
         annotationOverlay.finalizeEditing()
-        if grabbitDocument.fileURL != nil {
-            grabbitDocument.save(self)
-        } else {
-            saveAs(sender)
-        }
+        stashCurrentEntry()
+        grabbitDocument.updateChangeCount(.changeCleared)
     }
 
     private func copyToClipboard() {
@@ -1451,7 +1676,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
 
     // MARK: - Empty state / load image
 
-    private func applyEmptyState() {
+    func applyEmptyState() {
         captureView.image = nil
         annotationOverlay.isHidden = true
         cropOverlay.isHidden = true
@@ -1468,7 +1693,7 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         ocrToolButton.isEnabled       = false
     }
 
-    private func applyActiveState() {
+    func applyActiveState() {
         annotationOverlay.isHidden = false
         placeholderLabel.isHidden  = true
         arrowToolButton.isEnabled     = true
@@ -1558,16 +1783,25 @@ class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemVa
         DispatchQueue.main.async { [weak self] in self?.applyFitZoom() }
     }
 
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        // Use the active document's private undo manager so each library item
+        // has its own independent Cmd+Z / Cmd+Shift+Z history.
+        return grabbitDocument.undoManager
+    }
+
     func windowWillClose(_ notification: Notification) {
         if let m = toolShortcutMonitor { NSEvent.removeMonitor(m); toolShortcutMonitor = nil }
         NotificationCenter.default.removeObserver(self,
             name: NSColorPanel.colorDidChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self,
             name: NSScrollView.didEndLiveMagnifyNotification, object: zoomScroll)
-        // When the last editor closes, go back to accessory (menu-bar-only) mode.
-        if NSDocumentController.shared.documents.filter({ $0 !== grabbitDocument }).isEmpty {
-            NSApp.setActivationPolicy(.accessory)
+        // Nil all document callbacks to break retain cycles.
+        for doc in libraryDocuments {
+            doc.onAnnotationsChanged = nil
+            doc.onImageChanged       = nil
         }
+        EditorWindowController.shared = nil
+        NSApp.setActivationPolicy(.accessory)
     }
 
     // MARK: - Menu tool actions (routed via responder chain from Tools menu)
@@ -1680,4 +1914,36 @@ private class ResizeFieldDelegate: NSObject, NSTextFieldDelegate {
 
 private enum OCRKeys {
     static var textView: UInt8 = 0
+}
+
+// MARK: - Footer resize handle
+
+private class FooterResizeHandle: NSView {
+
+    static let minHeight: CGFloat = 60
+    static let maxHeight: CGFloat = 300
+
+    /// Called during drag with the clamped new height.
+    var onResize: ((CGFloat) -> Void)?
+    /// Returns the current footer height at drag start.
+    var startHeight: (() -> CGFloat)?
+
+    private var dragStartWindowY: CGFloat = 0
+    private var dragStartH:       CGFloat = 0
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeUpDown)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragStartWindowY = event.locationInWindow.y
+        dragStartH       = startHeight?() ?? 110
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        // Dragging up (positive delta) grows the footer because it sits at the bottom.
+        let delta  = event.locationInWindow.y - dragStartWindowY
+        let newH   = min(Self.maxHeight, max(Self.minHeight, dragStartH + delta))
+        onResize?(newH)
+    }
 }

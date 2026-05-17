@@ -25,6 +25,8 @@ enum Prefs {
     static let stepDiameter      = "grabbit.stepDiameter"
     static let stepFillColor     = "grabbit.stepFillColor"
     static let stepTextColor     = "grabbit.stepTextColor"
+    static let libraryPath       = "grabbit.libraryPath"
+    static let footerHeight      = "grabbit.footerHeight"
 }
 
 // MARK: - UserDefaults helpers
